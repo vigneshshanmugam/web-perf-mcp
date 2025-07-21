@@ -9,7 +9,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmitOnError": false,
-    "noCheck": true,
+    "noCheck": false,
     "declaration": true,
     "outDir": "./dist",
     "rootDir": "./",
@@ -22,6 +22,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["runner/**/*", "server/**/*"],
+  "include": ["runner/**/*", "server/**/*", "common/types.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -11,9 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:watch": "tsc --watch",
-    "clean": "rm -rf dist",
-    "prebuild": "npm run clean",
+    "watch": "tsc -w",
     "start": "npm run build && node ./dist/server/index.js",
     "test": "npm run build && node ./dist/runner/index.js --url https://example.com"
   },
