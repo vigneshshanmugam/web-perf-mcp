@@ -1,0 +1,36 @@
+{
+  "name": "perf-audit-tool",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Comprehensive performance auditing tool with Lighthouse, Playwright, and LLM analysis",
+  "main": "./dist/runner/index.js",
+  "type": "module",
+  "bin": {
+    "perf-audit": "./dist/runner/index.js",
+    "mcp": "./dist/server/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "start": "npm run build && node ./dist/server/index.js",
+    "test": "npm run build && node ./dist/runner/index.js --url https://example.com"
+  },
+  "keywords": [],
+  "author": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^14.0.0",
+    "lighthouse": "^12.8.0",
+    "playwright": "^1.54.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
