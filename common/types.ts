@@ -30,7 +30,7 @@ export interface PerformanceMetrics {
 export interface TestConfig {
   url: string;
   device?: 'desktop' | 'mobile';
-  networkThrottling?: 'fast3g' | 'slow3g' | 'none';
+  networkThrottling?: 'fast3g' | 'slow3g';
   runs?: number;
   cpuProfiling?: boolean;
   headless?: boolean;
