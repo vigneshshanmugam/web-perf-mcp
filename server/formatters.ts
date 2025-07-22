@@ -5,18 +5,16 @@ export function formatResultsForLLM(results: PerformanceMetrics): string {
 PERFORMANCE AUDIT RESULTS
 
 URL: ${results.url}
-Test Runs: ${results.testRuns}
 Overall Performance Score: ${results.performanceScore}/100
 Timestamp: ${results.timestamp}
 
-CORE WEB VITALS:
+Core Web Vitals:
 - First Contentful Paint (FCP): ${results.coreWebVitals.fcp.value}ms (${results.coreWebVitals.fcp.rating})
 - Largest Contentful Paint (LCP): ${results.coreWebVitals.lcp.value}ms (${results.coreWebVitals.lcp.rating})
 - Cumulative Layout Shift (CLS): ${results.coreWebVitals.cls.value} (${results.coreWebVitals.cls.rating})
 - Time to First Byte (TTFB): ${results.coreWebVitals.ttfb.value}ms (${results.coreWebVitals.ttfb.rating})
 
-DIAGNOSTICS:
-${results.diagnostics.map(diag => `- ${diag.severity.toUpperCase()}: ${diag.title} - ${diag.description}`).join('\n')}
+Data: ${JSON.stringify(results, null, 2)}
 `;
 }
 

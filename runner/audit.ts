@@ -1,16 +1,17 @@
 import puppeteer, { Browser, CDPSession, Page } from "puppeteer";
 import { Config, OutputMode, startFlow } from "lighthouse";
-import { writeFile } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
+import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from '../common/types.js';
 
 export class AuditRunner {
   options: Partial<TestConfig>;
   deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
   networkProfiles: Record<string, { latency: number; downloadThroughput: number; uploadThroughput: number }>;
+  private outputDir = join(process.cwd(), 'audit-results');
 
   constructor(options = {}) {
     this.options = {
-      runs: 3,
       device: "desktop",
       cpuProfiling: true,
       headless: true,
@@ -43,34 +44,19 @@ export class AuditRunner {
   async runAudit(url: string): Promise<PerformanceMetrics> {
     console.log(`Starting performance audit for: ${url}`);
     console.log(
-      `Configuration: ${this.options.runs} runs, ${this.options.device} device, ${this.options.networkThrottling} network`
+      `Configuration: ${this.options.device} device, ${this.options.networkThrottling} network`
     );
-
-    const results = [];
-
-    for (let i = 0; i < this.options.runs; i++) {
-      console.log(`Running test ${i + 1}/${this.options.runs}...`);
-      try {
-        const runResult = await this.runSingleTest(url, i);
-        results.push(runResult);
-        if (i < this.options.runs - 1) {
-          await this.sleep(2000);
-        }
-      } catch (error) {
-        console.error(`Test run ${i + 1} failed:`, error.message);
-      }
+    try {
+      const result = await this.runSingleTest(url);
+      await this.saveResults(result);
+      return result;
+    } catch (error) {
+      console.error(`Audit failed:`, error.message);
+      throw new Error(`Audit failed: ${error.message}`);
     }
-
-    if (results.length === 0) {
-      throw new Error("All test runs failed");
-    }
-    console.log(
-      `Completed ${results.length}/${this.options.runs} successful runs`
-    );
-    return this.aggregateResults(url, results);
   }
 
-  private async runSingleTest(url: string, runIndex: number) {
+  private async runSingleTest(url: string) {
     let browser: Browser = null;
     let page: Page = null;
     let session: CDPSession = null;
@@ -125,12 +111,18 @@ export class AuditRunner {
       const flowArtifacts = await flow.createArtifactsJson();
       const traceEvents = flowArtifacts.gatherSteps[0].artifacts.Trace.traceEvents;
 
-      await writeFile(`trace-${Date.now()}.trace`, JSON.stringify(traceEvents, null, 2));
+      await mkdir(this.outputDir, { recursive: true });
+      // Save trace events and CPU profile
+      const timestamp = Date.now();
+      const tracePath = join(this.outputDir, `trace-events-${timestamp}.json`);
+      await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
+      console.log(`✅ Trace events saved to ${tracePath}`);
+
       // Stop profiling and save CPU profile
       if (session && this.options.cpuProfiling) {
         try {
           const { profile } = await session.send('Profiler.stop');
-          const profilePath = `cpu-profile-${Date.now()}.cpuprofile`;
+          const profilePath = join(this.outputDir, `cpu-profile-${timestamp}.cpuprofile`);
           await writeFile(profilePath, JSON.stringify(profile, null, 2));
           console.log(`✅ CPU profile saved to ${profilePath}`);
         } catch (error) {
@@ -138,7 +130,7 @@ export class AuditRunner {
         }
       }
 
-      return this.combineResults(lighthouseResult?.steps[0], runIndex);
+      return this.combineResults(lighthouseResult?.steps[0], url);
     } catch (error) {
       console.error(`Test run failed:`, error);
       throw new Error(`Test run failed: ${error.message}`);
@@ -149,7 +141,7 @@ export class AuditRunner {
     }
   }
 
-  private combineResults(lighthouseResult: any, runIndex: number) {
+  private combineResults(lighthouseResult: any, url: string): PerformanceMetrics {
     if (!lighthouseResult || !lighthouseResult.lhr) {
       throw new Error("Invalid Lighthouse result");
     }
@@ -159,12 +151,13 @@ export class AuditRunner {
       if (audit && audit.numericValue !== undefined) {
         return {
           value: Math.round(audit.numericValue),
-          rating:
+          rating: (
             audit.score >= 0.9
               ? "good"
               : audit.score >= 0.5
                 ? "needs-improvement"
-                : "poor",
+                : "poor"
+          ) as MetricRating["rating"],
           percentile: Math.round((audit.score || 0) * 100),
         };
       }
@@ -172,106 +165,40 @@ export class AuditRunner {
     };
 
     return {
-      runIndex,
+      url,
       timestamp: new Date().toISOString(),
       performanceScore: Math.round(
         (lhr.categories.performance?.score || 0) * 100
       ),
       coreWebVitals: {
-        fcp: getCoreWebVital("first-contentful-paint"),
-        lcp: getCoreWebVital("largest-contentful-paint"),
-        cls: getCoreWebVital("cumulative-layout-shift"),
-        ttfb: getCoreWebVital("server-response-time"),
-      },
-      diagnostics: Object.values(lhr.audits)
-        .filter(
-          (audit: any) =>
-            audit.scoreDisplayMode === "binary" &&
-            audit.score !== null &&
-            audit.score < 1
-        )
-        .map((audit: any) => ({
-          id: audit.id,
-          title: audit.title,
-          description: audit.description,
-          severity: audit.score === 0 ? "error" : "warning",
-        }))
-        .slice(0, 10),
-    };
-  }
-
-  private aggregateResults(url: string, results: any[]): PerformanceMetrics {
-    if (results.length === 0) {
-      throw new Error("No results to aggregate");
-    }
-
-    const aggregateMetric = (metricPath: string): MetricRating | null => {
-      const values = results
-        .map((result) => this.getNestedValue(result, metricPath))
-        .filter((val) => val !== null && val !== undefined && !isNaN(val));
-
-      if (values.length === 0) return null;
-
-      const sorted = values.sort((a, b) => a - b);
-      const median = sorted[Math.floor(sorted.length / 2)];
-      const average = Math.round(
-        values.reduce((a, b) => a + b, 0) / values.length
-      );
-
-      return {
-        value: median, // Use median as primary value (more stable)
-        average,
-        min: Math.min(...values),
-        max: Math.max(...values),
-        rating: this.getRating(metricPath, median),
-      };
-    };
-
-    // Aggregate core metrics
-    return {
-      url,
-      timestamp: new Date().toISOString(),
-      testRuns: results.length,
-      performanceScore: Math.round(
-        results.reduce((sum, r) => sum + r.performanceScore, 0) / results.length
-      ),
-      coreWebVitals: {
-        fcp: aggregateMetric("coreWebVitals.fcp.value"),
-        lcp: aggregateMetric("coreWebVitals.lcp.value"),
-        cls: aggregateMetric("coreWebVitals.cls.value"),
-        ttfb: aggregateMetric("coreWebVitals.ttfb.value"),
+        fcp: {
+          ...getCoreWebVital("first-contentful-paint"),
+        },
+        lcp: {
+          ...getCoreWebVital("largest-contentful-paint"),
+        },
+        cls: {
+          ...getCoreWebVital("cumulative-layout-shift"),
+        },
+        ttfb: {
+          ...getCoreWebVital("server-response-time"),
+        },
       },
     };
   }
 
-  private getNestedValue(obj: any, path: string): any {
-    return path.split(".").reduce((current, key) => current?.[key], obj);
-  }
 
-  private getRating(metricPath: string, value: number): MetricRating["rating"] {
-    const thresholds = {
-      "coreWebVitals.fcp.value": [1800, 3000],
-      "coreWebVitals.lcp.value": [2500, 4000],
-      "coreWebVitals.cls.value": [0.1, 0.25],
-      "coreWebVitals.ttfb.value": [800, 1800],
-    };
 
-    const threshold = thresholds[metricPath];
-    if (!threshold || value === null || value === undefined) return "unknown";
-
-    if (metricPath.includes("cls")) {
-      return value <= threshold[0]
-        ? "good"
-        : value <= threshold[1]
-          ? "needs-improvement"
-          : "poor";
+  private async saveResults(results: PerformanceMetrics): Promise<void> {
+    try {
+      await mkdir(this.outputDir, { recursive: true });
+      const resultsPath = join(this.outputDir, 'performance-results.json');
+      await writeFile(resultsPath, JSON.stringify(results, null, 2));
+      console.log(`✅ Performance results saved to ${resultsPath}`);
+      console.log(`✅ All audit files saved to: ${this.outputDir}`);
+    } catch (error) {
+      console.warn('Failed to save results:', error.message);
     }
-
-    return value <= threshold[0]
-      ? "good"
-      : value <= threshold[1]
-        ? "needs-improvement"
-        : "poor";
   }
 
   private sleep(ms: number): Promise<void> {

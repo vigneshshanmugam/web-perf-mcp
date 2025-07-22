@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { writeFile } from "node:fs/promises";
 import { program } from "commander";
 import { AuditRunner } from './audit.js';
 import CPUProfileAnalyzer from "./analyzer.js";
@@ -28,10 +27,6 @@ program
     try {
       const results = await runner.runAudit(options.url);
       console.log(JSON.stringify(results, null, 2));
-      if (options.output) {
-        await writeFile(options.output, JSON.stringify(results, null, 2));
-        console.error(`Results saved to ${options.output}`);
-      }
     } catch (error) {
       console.error("Performance audit failed:", error);
       process.exit(1);
@@ -43,12 +38,10 @@ program
   .description("Analyze CPU profile and trace data")
   .requiredOption("--trace <trace>", "Performance trace to analyze")
   .requiredOption("--profile <profile>", "CPU profile to analyze")
-  .option("--output <output>", "Output file for analysis report", "analysis-report.json")
   .action(async (options) => {
     try {
       const analyzer = new CPUProfileAnalyzer();
       const report = await analyzer.analyzeCPUProfile(options.profile, options.trace);
-      analyzer.saveReport(report, options.output);
 
       console.log('\n=== QUICK ANALYSIS ===');
       console.log(`Performance Score: ${report.executive_summary.performance_score}/100`);

@@ -121,5 +121,5 @@ tmp
 # CPU Profiles
 *.cpuprofile
 
-#Trace files
-*.json
+#Audit Results
+audit-results
