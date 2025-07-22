@@ -117,3 +117,6 @@ tmp
 # VSCode config files
 .vscode
 .DS_Store
+
+# CPU Profiles
+*.cpuprofile
