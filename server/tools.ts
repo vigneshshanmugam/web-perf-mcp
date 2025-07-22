@@ -18,14 +18,7 @@ export const TOOL_DEFINITIONS = [
           default: 'fast3g',
           description: 'Network throttling simulation'
         },
-        runs: {
-          type: 'number',
-          default: 5,
-          minimum: 1,
-          maximum: 10,
-          description: 'Number of test runs for averaging'
-        },
-        cpuProfiling: {
+        profile: {
           type: 'boolean',
           default: true,
           description: 'Include detailed CPU profiling data'
@@ -79,6 +72,24 @@ export const TOOL_DEFINITIONS = [
         }
       },
       required: ['data']
+    }
+  },
+  {
+    name: 'analyze_performance_data',
+    description: 'Analyze CPU profile and/or trace events data to generate comprehensive performance insights and recommendations',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cpuProfilePath: {
+          type: 'string',
+          description: 'Absolute path to the CPU profile JSON file (required for CPU analysis)'
+        },
+        traceEventsPath: {
+          type: 'string',
+          description: 'Absolute path to the trace events JSON file (optional, enhances analysis when provided)'
+        }
+      },
+      required: ['cpuProfilePath']
     }
   }
 ];

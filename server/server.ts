@@ -47,12 +47,14 @@ export class PerformanceAuditServer {
         switch (name) {
           case 'run_performance_audit':
             return await this.handlers.runPerformanceAudit(args as unknown as TestConfig);
-          case 'get_performance_history':
-            return await this.handlers.getPerformanceHistory(args);
-          case 'compare_performance':
-            return await this.handlers.comparePerformance(args);
-          case 'analyze_performance_trends':
-            return await this.handlers.analyzePerformanceTrends(args);
+          // case 'get_performance_history':
+          //   return await this.handlers.getPerformanceHistory(args);
+          // case 'compare_performance':
+          //   return await this.handlers.comparePerformance(args);
+          // case 'analyze_performance_trends':
+          //   return await this.handlers.analyzePerformanceTrends(args);
+          case 'analyze_performance_data':
+            return await this.handlers.analyzePerformanceData(args);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }

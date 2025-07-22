@@ -5,15 +5,16 @@ import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from '../common/types.js';
 
 export class AuditRunner {
-  options: Partial<TestConfig>;
+  options: TestConfig;
   deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
   networkProfiles: Record<string, { latency: number; downloadThroughput: number; uploadThroughput: number }>;
   private outputDir = join(process.cwd(), 'audit-results');
 
   constructor(options = {}) {
     this.options = {
+      url: "",
       device: "desktop",
-      cpuProfiling: true,
+      profile: true,
       headless: true,
       ...options,
     };
@@ -75,7 +76,7 @@ export class AuditRunner {
       page = await browser.newPage();
       session = await page.createCDPSession();
 
-      if (this.options.cpuProfiling) {
+      if (this.options.profile) {
         await session.send('Profiler.enable');
         await session.send('Profiler.start');
       }
@@ -119,7 +120,7 @@ export class AuditRunner {
       console.log(`✅ Trace events saved to ${tracePath}`);
 
       // Stop profiling and save CPU profile
-      if (session && this.options.cpuProfiling) {
+      if (session && this.options.profile) {
         try {
           const { profile } = await session.send('Profiler.stop');
           const profilePath = join(this.outputDir, `cpu-profile-${timestamp}.cpuprofile`);

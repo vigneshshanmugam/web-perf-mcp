@@ -21,7 +21,7 @@ program
       runs: parseInt(options.runs) || 1,
       device: options.device,
       networkThrottling: options.network,
-      cpuProfiling: options.profile,
+      profile: options.profile,
       headless: options.headless,
     });
     try {

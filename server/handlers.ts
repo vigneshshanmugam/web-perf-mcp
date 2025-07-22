@@ -1,11 +1,10 @@
-import { exec } from 'child_process';
-import { promisify } from 'node:util';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { PerformanceMetrics, TestConfig } from '../common/types.js';
 import { formatResultsForLLM, generateAnalysisPrompt } from './formatters.js';
 import { PerformanceStorage } from './storage.js';
-
-const execAsync = promisify(exec);
+import CPUProfileAnalyzer from '../runner/analyzer.js';
+import { AuditRunner } from '../runner/audit.js';
 
 export class PerformanceHandlers {
   private resultsCache = new Map<string, PerformanceMetrics>();
@@ -33,20 +32,9 @@ export class PerformanceHandlers {
       };
     }
 
-    const auditScript = path.join(process.cwd(), 'dist', 'runner', 'index.js');
-    const args = [
-      `--url "${config.url}"`,
-      `--device ${config.device || 'desktop'}`,
-      `--network ${config.networkThrottling || 'fast3g'}`,
-      `--runs ${config.runs || 5}`,
-      config.cpuProfiling ? '--cpu-profile' : ''
-    ].filter(Boolean);
-
-    const command = `node ${auditScript} ${args.join(' ')}`;
-
     try {
-      const { stdout } = await execAsync(command);
-      const results: PerformanceMetrics = JSON.parse(stdout);
+      const report = new AuditRunner(config);
+      const results = await report.runAudit(config.url);
 
       // Cache and store results
       this.resultsCache.set(cacheKey, results);
@@ -197,4 +185,111 @@ export class PerformanceHandlers {
 
     return comparison;
   }
+
+  async analyzePerformanceData(args: any) {
+    const { cpuProfilePath, traceEventsPath } = args;
+    try {
+      const analyzer = new CPUProfileAnalyzer();
+      // Perform the analysis using the existing analyzer methods
+      let traceEvents = null;
+      const cpuProfile = JSON.parse(await readFile(cpuProfilePath, 'utf8'));
+      if (traceEventsPath && existsSync(traceEventsPath)) {
+        const traceData = JSON.parse(await readFile(traceEventsPath, 'utf8'));
+        traceEvents = traceData.traceEvents || traceData;
+      }
+
+      analyzer.analyzeCPUProfileData(cpuProfile);
+      if (traceEvents) {
+        analyzer.analyzeTraceEvents(traceEvents);
+      }
+
+      const report = analyzer.generateLLMReport();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: this.formatStructuredAnalysis(report),
+          },
+        ],
+      };
+    } catch (error) {
+      throw new Error(`Performance data analysis failed: ${error.message}`);
+    }
+  }
+
+  private formatStructuredAnalysis(report: any): string {
+    let output = `COMPREHENSIVE PERFORMANCE ANALYSIS\n\n`;
+
+    // Executive Summary
+    output += `EXECUTIVE SUMMARY\n`;
+    output += `Performance Score: ${report.executive_summary.performance_score}/100\n`;
+    output += `Total Execution Time: ${report.executive_summary.total_execution_time_ms}ms\n`;
+    output += `Total Samples: ${report.executive_summary.total_samples}\n`;
+    output += `Sample Interval: ${report.executive_summary.sample_interval_ms}ms\n\n`;
+
+    // Top Bottleneck
+    if (report.executive_summary.top_bottleneck) {
+      output += `Primary Bottleneck: ${report.executive_summary.top_bottleneck.function}\n`;
+      output += `Impact: ${report.executive_summary.top_bottleneck.impact}\n\n`;
+    }
+
+    // Critical Issues
+    if (report.critical_performance_issues.length > 0) {
+      output += `CRITICAL PERFORMANCE ISSUES (${report.critical_performance_issues.length})\n`;
+      report.critical_performance_issues.forEach((issue, index) => {
+        output += `${index + 1}. Function: ${issue.function}\n`;
+        output += `   Severity: ${issue.severity}\n`;
+        output += `   Impact: ${issue.impact}\n`;
+        output += `   Location: ${issue.location}\n\n`;
+      });
+    }
+
+    // High Impact Functions
+    output += `HIGH IMPACT FUNCTIONS\n`;
+    report.high_impact_functions.slice(0, 10).forEach((func, index) => {
+      output += `${index + 1}. ${func.function}\n`;
+      output += `   File: ${func.file}\n`;
+      output += `   Execution Time: ${func.execution_time_ms}ms\n`;
+      output += `   CPU Percentage: ${func.cpu_percentage}%\n`;
+      output += `   Call Count: ${func.call_count}\n`;
+      output += `   Location: ${func.location}\n\n`;
+    });
+
+    // Script Performance
+    if (report.script_performance) {
+      output += `SCRIPT PERFORMANCE ANALYSIS\n`;
+      if (report.script_performance.long_running_tasks && report.script_performance.long_running_tasks.length > 0) {
+        output += `Long Running Tasks (${report.script_performance.long_running_tasks.length}):\n`;
+        report.script_performance.long_running_tasks.slice(0, 10).forEach((task, index) => {
+          output += `  ${index + 1}. ${task.name} - ${task.duration}ms\n`;
+        });
+        output += `\n`;
+      }
+      if (report.script_performance.script_execution_analysis && report.script_performance.script_execution_analysis.length > 0) {
+        output += `Script Execution Analysis (${report.script_performance.script_execution_analysis.length}):\n`;
+        report.script_performance.script_execution_analysis.slice(0, 10).forEach((script, index) => {
+          output += `  ${index + 1}. ${script.type} - ${script.duration}ms\n`;
+        });
+        output += `\n`;
+      }
+    }
+
+    // Optimization Opportunities
+    if (report.optimization_opportunities && report.optimization_opportunities.length > 0) {
+      output += `OPTIMIZATION OPPORTUNITIES (${report.optimization_opportunities.length})\n`;
+      report.optimization_opportunities.forEach((rec, index) => {
+        output += `${index + 1}. ${rec}\n`;
+      });
+      output += `\n`;
+    }
+
+    // LLM Analysis Prompt (if available)
+    if (report.llm_analysis_prompt) {
+      output += `AI ANALYSIS INSIGHTS\n`;
+      output += `${report.llm_analysis_prompt}\n\n`;
+    }
+    return output;
+  }
+
+
 }
