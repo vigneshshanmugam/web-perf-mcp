@@ -1,12 +1,11 @@
-import { chromium } from "playwright";
-import lighthouse from "lighthouse";
-import { launch } from "chrome-launcher";
+import puppeteer, { Browser, CDPSession, Page } from "puppeteer";
+import { Config, OutputMode, startFlow } from "lighthouse";
 import { writeFile } from "fs/promises";
 import { TestConfig, PerformanceMetrics, MetricRating } from '../common/types.js';
 
-export class PerformanceRunner {
+export class AuditRunner {
   options: Partial<TestConfig>;
-  deviceConfigs: Record<string, { viewport: { width: number; height: number }; userAgent: string }>;
+  deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
   networkProfiles: Record<string, { latency: number; downloadThroughput: number; uploadThroughput: number }>;
 
   constructor(options = {}) {
@@ -21,13 +20,9 @@ export class PerformanceRunner {
     this.deviceConfigs = {
       desktop: {
         viewport: { width: 1366, height: 768 },
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       },
       mobile: {
         viewport: { width: 375, height: 812 },
-        userAgent:
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15",
       },
     };
 
@@ -76,85 +71,65 @@ export class PerformanceRunner {
   }
 
   private async runSingleTest(url: string, runIndex: number) {
-    let browser = null;
-    let chrome = null;
+    let browser: Browser = null;
+    let page: Page = null;
+    let session: CDPSession = null;
 
     try {
-      chrome = await launch({
-        chromeFlags: [
-          "--headless",
+      // Launch Chrome with Puppeteer directly
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
           "--disable-gpu",
           "--no-sandbox",
           "--disable-dev-shm-usage",
         ],
+        defaultViewport: this.deviceConfigs[this.options.device].viewport
       });
+      page = await browser.newPage();
+      session = await page.createCDPSession();
 
-      // Configure Lighthouse options
-      const lighthouseConfig = {
+      if (this.options.cpuProfiling) {
+        await session.send('Profiler.enable');
+        await session.send('Profiler.start');
+      }
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+      const lhConfig: Config = {
         extends: "lighthouse:default",
         settings: {
+          output: 'json' as OutputMode,
           onlyCategories: ['performance'],
           formFactor: this.options.device,
-          screenEmulation:
-            this.options.device === "mobile"
-              ? {
-                mobile: true,
-                width: 375,
-                height: 812,
-                deviceScaleFactor: 3,
-                disabled: false,
-              }
-              : {
-                mobile: false,
-                width: 1366,
-                height: 768,
-                deviceScaleFactor: 1,
-                disabled: false,
-              },
-          emulatedUserAgent: this.deviceConfigs[this.options.device].userAgent,
+          screenEmulation: this.options.device === "mobile"
+            ? {
+              mobile: true,
+              width: 375,
+              height: 812,
+              deviceScaleFactor: 3,
+              disabled: false,
+            }
+            : {
+              mobile: false,
+              width: 1366,
+              height: 768,
+              deviceScaleFactor: 1,
+              disabled: false,
+            },
         },
       };
 
-      await this.sleep(5000); // Give Chrome more time to fully start and be ready for connections
+      const flow = await startFlow(page, { config: lhConfig, flags: { saveAssets: true } as any });
+      await flow.navigate(url);
+      const lighthouseResult = await flow.createFlowResult();
+      const flowArtifacts = await flow.createArtifactsJson();
+      const traceEvents = flowArtifacts.gatherSteps[0].artifacts.Trace.traceEvents;
 
-      let client = null;
-      if (this.options.cpuProfiling) {
-        console.log(`Attempting to connect to Chrome on port ${chrome.port} for CPU profiling...`);
+      await writeFile(`trace-${Date.now()}.trace`, JSON.stringify(traceEvents, null, 2));
+      // Stop profiling and save CPU profile
+      if (session && this.options.cpuProfiling) {
         try {
-          browser = await chromium.connectOverCDP(`http://localhost:${chrome.port}`);
-          console.log('Successfully connected to Chrome via CDP');
-          const context = await browser.newContext();
-          const page = await context.newPage();
-
-          client = await context.newCDPSession(page);
-          await client.send('Profiler.enable');
-          await client.send('Profiler.start');
-        } catch (error) {
-          console.warn('Failed to start CPU profiling:', error.message);
-          if (browser) {
-            await browser.close().catch(() => { });
-            browser = null;
-          }
-          client = null;
-        }
-      }
-
-      // Run Lighthouse audit
-      const lighthouseResult = await lighthouse(
-        url,
-        {
-          port: chrome.port,
-          disableStorageReset: false,
-          logLevel: 'error',
-          output: 'json',
-        },
-        lighthouseConfig
-      );
-
-      // Stop and save the CPU profile if profiling was started
-      if (client && this.options.cpuProfiling) {
-        try {
-          const { profile } = await client.send('Profiler.stop');
+          const { profile } = await session.send('Profiler.stop');
           const profilePath = `cpu-profile-${Date.now()}.cpuprofile`;
           await writeFile(profilePath, JSON.stringify(profile, null, 2));
           console.log(`✅ CPU profile saved to ${profilePath}`);
@@ -163,17 +138,21 @@ export class PerformanceRunner {
         }
       }
 
-      return this.combineResults(lighthouseResult, runIndex);
+      return this.combineResults(lighthouseResult?.steps[0], runIndex);
     } catch (error) {
       console.error(`Test run failed:`, error);
       throw new Error(`Test run failed: ${error.message}`);
     } finally {
+      if (session) await session.detach().catch(() => { });
+      if (page) await page.close().catch(() => { });
       if (browser) await browser.close().catch(() => { });
-      if (chrome) chrome.kill();
     }
   }
 
   private combineResults(lighthouseResult: any, runIndex: number) {
+    if (!lighthouseResult || !lighthouseResult.lhr) {
+      throw new Error("Invalid Lighthouse result");
+    }
     const lhr = lighthouseResult.lhr;
     const getCoreWebVital = (auditId: string) => {
       const audit = lhr.audits[auditId];
@@ -262,7 +241,6 @@ export class PerformanceRunner {
         cls: aggregateMetric("coreWebVitals.cls.value"),
         ttfb: aggregateMetric("coreWebVitals.ttfb.value"),
       },
-      diagnostics: this.aggregateDiagnostics(results),
     };
   }
 
@@ -294,28 +272,6 @@ export class PerformanceRunner {
       : value <= threshold[1]
         ? "needs-improvement"
         : "poor";
-  }
-
-  private aggregateDiagnostics(results: any[]) {
-    const allDiagnostics = results.flatMap((r) => r.diagnostics);
-    const grouped = new Map();
-
-    allDiagnostics.forEach((diag) => {
-      if (!grouped.has(diag.id)) {
-        grouped.set(diag.id, []);
-      }
-      grouped.get(diag.id).push(diag);
-    });
-
-    return Array.from(grouped.entries())
-      .map(([id, diags]) => ({
-        id,
-        title: diags[0].title,
-        description: diags[0].description,
-        severity: diags[0].severity,
-        frequency: diags.length / results.length,
-      }))
-      .filter((d) => d.frequency >= 0.5); // Only include issues that appear in at least half the runs
   }
 
   private sleep(ms: number): Promise<void> {

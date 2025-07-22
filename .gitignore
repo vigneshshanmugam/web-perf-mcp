@@ -120,3 +120,6 @@ tmp
 
 # CPU Profiles
 *.cpuprofile
+
+#Trace files
+*.json

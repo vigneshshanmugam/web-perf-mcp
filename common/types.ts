@@ -19,12 +19,6 @@ export interface PerformanceMetrics {
     ttfb: MetricRating;
   };
   performanceScore: number;
-  diagnostics: Array<{
-    id: string;
-    title: string;
-    description: string;
-    severity: 'error' | 'warning' | 'info';
-  }>;
 }
 
 export interface TestConfig {

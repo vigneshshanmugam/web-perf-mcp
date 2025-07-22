@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
+import { promisify } from 'node:util';
+import path from 'node:path';
 import { PerformanceMetrics, TestConfig } from '../common/types.js';
 import { formatResultsForLLM, generateAnalysisPrompt } from './formatters.js';
 import { PerformanceStorage } from './storage.js';
