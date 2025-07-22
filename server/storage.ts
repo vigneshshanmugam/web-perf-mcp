@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { PerformanceMetrics } from '../common/types';
+import { PerformanceMetrics } from '../runner/types';
 
 export class PerformanceStorage {
   private dataDir: string;

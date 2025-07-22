@@ -11,16 +11,12 @@ program
   )
   .requiredOption("--url <url>", "URL to audit")
   .option("--device <device>", "Device type (desktop|mobile)", "desktop")
-  .option("--runs <runs>", "Number of test runs", "1")
-  .option("--network <network>", "Network throttling (fast3g|slow3g|none)", "fast3g")
   .option("--profile", "Enable CPU profiling", false)
   .option("--headless", "Run in headless mode", true)
   .option("--output <file>", "Save results to file")
   .action(async (options) => {
     const runner = new AuditRunner({
-      runs: parseInt(options.runs) || 1,
       device: options.device,
-      networkThrottling: options.network,
       profile: options.profile,
       headless: options.headless,
     });
@@ -42,13 +38,11 @@ program
     try {
       const analyzer = new CPUProfileAnalyzer();
       const report = await analyzer.analyzeCPUProfile(options.profile, options.trace);
-
       console.log('\n=== QUICK ANALYSIS ===');
       console.log(`Performance Score: ${report.executive_summary.performance_score}/100`);
       console.log(`Total Execution Time: ${report.executive_summary.total_execution_time_ms}ms`);
       console.log(`Critical Issues Found: ${report.critical_performance_issues.length}`);
       console.log(`Top CPU Consumer: ${report.high_impact_functions[0]?.function || 'N/A'}`);
-
     } catch (error) {
       console.error('Analysis failed:', error);
       process.exit(1);

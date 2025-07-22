@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { PerformanceMetrics, TestConfig } from '../common/types.js';
+import { PerformanceMetrics, TestConfig } from '../runner/types.js';
 import { formatResultsForLLM, generateAnalysisPrompt } from './formatters.js';
 import { PerformanceStorage } from './storage.js';
 import CPUProfileAnalyzer from '../runner/analyzer.js';
@@ -190,20 +190,7 @@ export class PerformanceHandlers {
     const { cpuProfilePath, traceEventsPath } = args;
     try {
       const analyzer = new CPUProfileAnalyzer();
-      // Perform the analysis using the existing analyzer methods
-      let traceEvents = null;
-      const cpuProfile = JSON.parse(await readFile(cpuProfilePath, 'utf8'));
-      if (traceEventsPath && existsSync(traceEventsPath)) {
-        const traceData = JSON.parse(await readFile(traceEventsPath, 'utf8'));
-        traceEvents = traceData.traceEvents || traceData;
-      }
-
-      analyzer.analyzeCPUProfileData(cpuProfile);
-      if (traceEvents) {
-        analyzer.analyzeTraceEvents(traceEvents);
-      }
-
-      const report = analyzer.generateLLMReport();
+      const report = await analyzer.analyzeCPUProfile(cpuProfilePath, traceEventsPath);
       return {
         content: [
           {
@@ -272,15 +259,6 @@ export class PerformanceHandlers {
         });
         output += `\n`;
       }
-    }
-
-    // Optimization Opportunities
-    if (report.optimization_opportunities && report.optimization_opportunities.length > 0) {
-      output += `OPTIMIZATION OPPORTUNITIES (${report.optimization_opportunities.length})\n`;
-      report.optimization_opportunities.forEach((rec, index) => {
-        output += `${index + 1}. ${rec}\n`;
-      });
-      output += `\n`;
     }
 
     // LLM Analysis Prompt (if available)

@@ -22,6 +22,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["runner/**/*", "server/**/*", "common/types.ts"],
+  "include": ["runner/**/*", "server/**/*", "runner/types.ts"],
   "exclude": ["node_modules", "dist"]
 }

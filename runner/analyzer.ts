@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from 'node:path';
+import { AggregatedFunction, CPUProfile } from './types';
 
 class CPUProfileAnalyzer {
   analysisResults = {
@@ -46,7 +47,7 @@ class CPUProfileAnalyzer {
     }
   }
 
-  analyzeCPUProfileData(cpuProfile) {
+  analyzeCPUProfileData(cpuProfile: CPUProfile) {
     const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
     if (!nodes || !samples) {
       throw new Error('Invalid CPU profile format');
@@ -89,9 +90,14 @@ class CPUProfileAnalyzer {
     // Calculate total time including children
     this.calculateTotalTimes(nodeMap, nodes);
 
-    // Extract top functions by self time
+    // Extract top functions by self time, excluding Lighthouse internal functions
     const sortedFunctions = Array.from(nodeMap.values())
-      .filter(node => node.hitCount > 0)
+      .filter(node => {
+        if (node.hitCount === 0) return false;
+        const url = node.callFrame.url || '';
+        if (url.includes('_lighthouse-eval.js')) return false;
+        return true;
+      })
       .sort((a, b) => b.selfTime - a.selfTime)
       .slice(0, 20);
 
@@ -110,24 +116,21 @@ class CPUProfileAnalyzer {
     this.identifyBottlenecks(nodeMap, totalTime);
   }
 
-  calculateTotalTimes(nodeMap, nodes) {
+  calculateTotalTimes(nodeMap: Map<number, any>, nodes: any[]) {
     const visited = new Set();
 
-    const calculateTotal = (nodeId) => {
+    const calculateTotal = (nodeId: number) => {
       if (visited.has(nodeId)) return 0;
       visited.add(nodeId);
 
       const node = nodeMap.get(nodeId);
       if (!node) return 0;
-
       let totalTime = node.selfTime;
-
       if (node.children) {
         for (const childId of node.children) {
           totalTime += calculateTotal(childId);
         }
       }
-
       node.totalTime = totalTime;
       return totalTime;
     };
@@ -158,7 +161,6 @@ class CPUProfileAnalyzer {
           severity: this.getSeverity(node.selfTime / totalTime)
         };
 
-        // issue.suggestions = this.generateFunctionSpecificSuggestions(node);
         bottlenecks.push(issue);
       });
 
@@ -201,43 +203,6 @@ class CPUProfileAnalyzer {
     this.analysisResults.scriptAnalysis = scriptEvents.slice(0, 15);
   }
 
-  generateFunctionSpecificSuggestions(node) {
-    const suggestions = [];
-    const funcName = node.callFrame.functionName || '';
-    const url = node.callFrame.url || '';
-
-    // DOM-related optimizations
-    if (funcName.includes('querySelector') || funcName.includes('getElementsBy')) {
-      suggestions.push('Consider caching DOM queries or using more specific selectors');
-    }
-
-    // Layout/Style calculations
-    if (funcName.includes('Layout') || funcName.includes('Style')) {
-      suggestions.push('Minimize DOM manipulations and batch style changes');
-    }
-
-    // Event handling
-    if (funcName.includes('addEventListener') || funcName.includes('Event')) {
-      suggestions.push('Consider event delegation or debouncing frequent events');
-    }
-
-    // Network/fetch operations
-    if (funcName.includes('fetch') || funcName.includes('XMLHttpRequest')) {
-      suggestions.push('Optimize API calls, implement caching, or use request batching');
-    }
-
-    // Third-party scripts
-    if (url && !url.includes(window?.location?.hostname || 'localhost')) {
-      suggestions.push('Consider lazy loading or optimizing third-party script usage');
-    }
-
-    // Generic suggestions for high CPU functions
-    if (suggestions.length === 0) {
-      suggestions.push('Consider optimizing algorithm efficiency or using Web Workers for heavy computation');
-    }
-
-    return suggestions;
-  }
 
   getSeverity(percentage) {
     if (percentage > 0.2) return 'CRITICAL';
@@ -276,12 +241,10 @@ class CPUProfileAnalyzer {
         call_count: func.hitCount,
         location: `${func.url}:${func.lineNumber}`
       })),
-      optimization_opportunities: this.generateOptimizationOpportunities(),
       script_performance: {
         long_running_tasks: longTasks || [],
         script_execution_analysis: scriptAnalysis || []
       },
-      recommendations: this.generateRecommendations(),
       llm_analysis_prompt: this.generateLLMPrompt()
     };
   }
@@ -300,59 +263,6 @@ class CPUProfileAnalyzer {
     return Math.max(0, Math.round(score));
   }
 
-  generateOptimizationOpportunities() {
-    const opportunities = [];
-    const { topFunctions, performanceBottlenecks } = this.analysisResults;
-
-    // Group similar functions
-    const functionGroups = {};
-    topFunctions.forEach(func => {
-      const file = this.getFileNameFromUrl(func.url);
-      if (!functionGroups[file]) functionGroups[file] = [];
-      functionGroups[file].push(func);
-    });
-
-    Object.entries(functionGroups).forEach(([file, functions]: [string, any[]]) => {
-      if (functions.length > 1) {
-        const totalTime = functions.reduce((sum, f) => sum + f.selfTime, 0);
-        opportunities.push({
-          type: 'FILE_OPTIMIZATION',
-          file: file,
-          total_time_ms: totalTime,
-          function_count: functions.length,
-          suggestion: `Multiple performance-heavy functions detected in ${file}. Consider code review and optimization.`
-        });
-      }
-    });
-
-    return opportunities;
-  }
-
-  generateRecommendations() {
-    const recommendations = [];
-    const { performanceBottlenecks, topFunctions } = this.analysisResults;
-
-    // Add general recommendations based on analysis
-    if (performanceBottlenecks.length > 0) {
-      recommendations.push({
-        priority: 'HIGH',
-        category: 'CPU_OPTIMIZATION',
-        description: `Focus on optimizing the top ${Math.min(3, performanceBottlenecks.length)} CPU-intensive functions`,
-        specific_functions: performanceBottlenecks.slice(0, 3).map(b => b.functionName)
-      });
-    }
-
-    if (topFunctions.some(f => f.url.includes('node_modules') || f.url.includes('vendor'))) {
-      recommendations.push({
-        priority: 'MEDIUM',
-        category: 'THIRD_PARTY_OPTIMIZATION',
-        description: 'Consider optimizing or replacing heavy third-party dependencies'
-      });
-    }
-
-    return recommendations;
-  }
-
   generateLLMPrompt() {
     return {
       instruction: "Please analyze this CPU performance profile and provide specific, actionable recommendations for optimization.",
@@ -368,7 +278,6 @@ class CPUProfileAnalyzer {
     };
   }
 
-  // Method to save the LLM-friendly report
   saveReport(report, outputPath) {
     const formattedReport = {
       ...report,

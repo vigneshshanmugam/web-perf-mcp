@@ -1,4 +1,4 @@
-import { PerformanceMetrics } from '../common/types.js';
+import { PerformanceMetrics } from '../runner/types.js';
 
 export function formatResultsForLLM(results: PerformanceMetrics): string {
   return `

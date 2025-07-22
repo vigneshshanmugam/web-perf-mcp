@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { TestConfig } from '../common/types.js';
+import { TestConfig } from '../runner/types.js';
 import { TOOL_DEFINITIONS } from './tools.js';
 import { PerformanceHandlers } from './handlers.js';
 

@@ -2,12 +2,11 @@ import puppeteer, { Browser, CDPSession, Page } from "puppeteer";
 import { Config, OutputMode, startFlow } from "lighthouse";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { TestConfig, PerformanceMetrics, MetricRating } from '../common/types.js';
+import { TestConfig, PerformanceMetrics, MetricRating } from './types.js';
 
 export class AuditRunner {
   options: TestConfig;
   deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
-  networkProfiles: Record<string, { latency: number; downloadThroughput: number; uploadThroughput: number }>;
   private outputDir = join(process.cwd(), 'audit-results');
 
   constructor(options = {}) {
@@ -27,26 +26,10 @@ export class AuditRunner {
         viewport: { width: 375, height: 812 },
       },
     };
-
-    this.networkProfiles = {
-      fast3g: {
-        latency: 562.5,
-        downloadThroughput: 1.6 * 1024 * 1024 / 8,
-        uploadThroughput: 750 * 1024 / 8,
-      },
-      slow3g: {
-        latency: 2000,
-        downloadThroughput: 500 * 1024 / 8,
-        uploadThroughput: 500 * 1024 / 8,
-      }
-    };
   }
 
   async runAudit(url: string): Promise<PerformanceMetrics> {
     console.log(`Starting performance audit for: ${url}`);
-    console.log(
-      `Configuration: ${this.options.device} device, ${this.options.networkThrottling} network`
-    );
     try {
       const result = await this.runSingleTest(url);
       await this.saveResults(result);
@@ -106,18 +89,20 @@ export class AuditRunner {
         },
       };
 
-      const flow = await startFlow(page, { config: lhConfig, flags: { saveAssets: true } as any });
-      await flow.navigate(url);
+      const flow = await startFlow(page, { config: lhConfig });
+      await flow.navigate(url, { logLevel: 'error' });
       const lighthouseResult = await flow.createFlowResult();
       const flowArtifacts = await flow.createArtifactsJson();
-      const traceEvents = flowArtifacts.gatherSteps[0].artifacts.Trace.traceEvents;
+      const traceEvents = flowArtifacts.gatherSteps[0].artifacts?.Trace?.traceEvents;
 
       await mkdir(this.outputDir, { recursive: true });
       // Save trace events and CPU profile
       const timestamp = Date.now();
-      const tracePath = join(this.outputDir, `trace-events-${timestamp}.json`);
-      await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
-      console.log(`✅ Trace events saved to ${tracePath}`);
+      if (traceEvents) {
+        const tracePath = join(this.outputDir, `trace-events-${timestamp}.json`);
+        await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
+        console.log(`✅ Trace events saved to ${tracePath}`);
+      }
 
       // Stop profiling and save CPU profile
       if (session && this.options.profile) {
@@ -172,18 +157,10 @@ export class AuditRunner {
         (lhr.categories.performance?.score || 0) * 100
       ),
       coreWebVitals: {
-        fcp: {
-          ...getCoreWebVital("first-contentful-paint"),
-        },
-        lcp: {
-          ...getCoreWebVital("largest-contentful-paint"),
-        },
-        cls: {
-          ...getCoreWebVital("cumulative-layout-shift"),
-        },
-        ttfb: {
-          ...getCoreWebVital("server-response-time"),
-        },
+        fcp: getCoreWebVital("first-contentful-paint"),
+        lcp: getCoreWebVital("largest-contentful-paint"),
+        cls: getCoreWebVital("cumulative-layout-shift"),
+        ttfb: getCoreWebVital("server-response-time"),
       },
     };
   }
