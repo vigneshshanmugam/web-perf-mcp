@@ -1,97 +1,64 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { CPUProfileAnalysis } from "./types";
 
 
 export default class Formatter {
-  async formatStructuredAnalysis(report: any): Promise<string> {
+  async formatStructuredAnalysis(report: CPUProfileAnalysis): Promise<string> {
     let output = `# COMPREHENSIVE PERFORMANCE ANALYSIS\n\n`;
 
-    // Load markdown report for Web Vitals context
-    const markdownReport = await this.loadMarkdownReport();
-
     output += `## 🎯 EXECUTIVE SUMMARY\n`;
-    output += `- **Performance Score**: ${report.executive_summary.performance_score}/100\n`;
     output += `- **Total CPU Execution Time**: ${report.executive_summary.total_execution_time_ms}ms\n`;
     output += `- **Total Samples**: ${report.executive_summary.total_samples}\n`;
     output += `- **Sample Interval**: ${report.executive_summary.sample_interval_ms}ms\n`;
-
-    if (report.executive_summary.top_bottleneck) {
-      output += `- **Primary CPU Bottleneck**: ${report.executive_summary.top_bottleneck.function}\n`;
-      output += `- **Impact**: ${report.executive_summary.top_bottleneck.impact}\n`;
-    }
     output += `\n`;
 
-    // Web Vitals Context from Markdown Report
+    const markdownReport = await this.loadMarkdownReport();
     if (markdownReport) {
       output += `## 📊 WEB VITALS & LONG TASKS CORRELATION\n`;
       output += markdownReport;
       output += `\n`;
     }
 
-    // Critical Performance Issues with Context
-    if (report.critical_performance_issues.length > 0) {
-      output += `## 🚨 CRITICAL PERFORMANCE ISSUES (${report.critical_performance_issues.length})\n`;
-      report.critical_performance_issues.forEach((issue, index) => {
-        output += `### ${index + 1}. ${issue.function}\n`;
-        output += `- **Severity**: ${issue.severity}\n`;
-        output += `- **Impact**: ${issue.impact}\n`;
-        output += `- **Location**: ${issue.location}\n`;
-        output += `- **Optimization Priority**: ${this.calculateOptimizationPriority(issue)}\n\n`;
-      });
-    }
-
-    // High Impact Functions with Actionable Context
     output += `## ⚡ HIGH IMPACT CPU FUNCTIONS\n`;
     output += `*Functions consuming the most CPU time and blocking the main thread*\n\n`;
 
-    report.high_impact_functions.slice(0, 10).forEach((func, index) => {
-      output += `### ${index + 1}. ${func.function}\n`;
-      output += `- **File**: ${func.file}\n`;
-      output += `- **CPU Time**: ${func.execution_time_ms}ms (${func.cpu_percentage}% of total)\n`;
-      output += `- **Call Count**: ${func.call_count}\n`;
-      output += `- **Location**: ${func.location}\n`;
-      output += `- **Optimization Suggestion**: ${this.generateOptimizationSuggestion(func)}\n\n`;
-    });
+    if (report.high_impact_functions.length > 0) {
+      output += `### Function Performance Details\n\n`;
+      output += `| Function | Original Source | File | CPU Time | CPU % | Calls | Source Mapped \n`;
+      output += `|----------|----------------|------|----------|-------|-------|---------------|\n`;
 
-    // Script Performance Analysis with Long Tasks Correlation
+      report.high_impact_functions.slice(0, 10).forEach((func) => {
+        const originalSource = func.originalFile && func.isSourceMapped
+          ? `${func.originalFile}:${func.originalLine}`
+          : 'N/A';
+        const sourceMapped = func.isSourceMapped ? '✅' : '❌';
+        output += `| ${func.function} | ${originalSource} | ${func.file} | ${func.execution_time_ms}ms | ${func.cpu_percentage}% | ${func.call_count} | ${sourceMapped} |\n`;
+      });
+      output += `\n`;
+    }
+
     if (report.script_performance) {
-      output += `## 🔍 SCRIPT EXECUTION & LONG TASKS ANALYSIS\n`;
-
-      if (report.script_performance.long_running_tasks && report.script_performance.long_running_tasks.length > 0) {
-        output += `### Long Running Tasks (${report.script_performance.long_running_tasks.length})\n`;
-        output += `*Tasks that block the main thread and hurt user experience*\n\n`;
-
-        report.script_performance.long_running_tasks.slice(0, 10).forEach((task, index) => {
-          output += `${index + 1}. **${task.name}** - ${task.duration}ms\n`;
-          output += `   - Impact on Core Web Vitals: ${this.assessLongTaskImpact(task)}\n`;
-        });
-        output += `\n`;
-      }
-
+      output += `## 🔍 SCRIPT EXECUTION\n\n`;
       if (report.script_performance.script_execution_analysis && report.script_performance.script_execution_analysis.length > 0) {
-        output += `### Script Execution Breakdown\n`;
-        report.script_performance.script_execution_analysis.slice(0, 10).forEach((script, index) => {
-          output += `${index + 1}. **${script.type}** - ${script.duration}ms\n`;
+        output += `### Script Execution Breakdown\n\n`;
+        output += `| Script Type | Duration | URL | Start Time |\n`;
+        output += `|-------------|----------|-----|------------|\n`;
+
+        report.script_performance.script_execution_analysis.slice(0, 10).forEach((script) => {
+          const hostname = script.url ? new URL(script.url).hostname : 'Unknown';
+          output += `| ${script.type} | ${script.duration}ms | ${hostname} | ${script.startTime.toFixed(1)}ms |\n`;
         });
         output += `\n`;
       }
     }
 
-    // Cross-Referenced Optimization Recommendations
-    output += `## 🎯 PRIORITIZED OPTIMIZATION RECOMMENDATIONS\n`;
-    output += this.generateCrossReferencedRecommendations(report, markdownReport);
-    output += `\n`;
-
-    // LLM Analysis Context
-    if (report.llm_analysis_prompt) {
-      output += `## 🤖 AI ANALYSIS CONTEXT\n`;
-      output += `${JSON.stringify(report.llm_analysis_prompt, null, 2)}\n\n`;
+    // Flamegraph Analysis for LLM
+    if (report.flamegraph_analysis) {
+      output += `## 🔥 FLAMEGRAPH ANALYSIS\n\n`;
+      output += this.formatFlamegraphAnalysis(report.flamegraph_analysis);
     }
-
-    // Raw Data for Deep Analysis
-    output += `## 📋 RAW PERFORMANCE DATA\n`;
-    output += `\`\`\`json\n${JSON.stringify(report, null, 2)}\`\`\`\n\n`;
 
     return output;
   }
@@ -108,90 +75,74 @@ export default class Formatter {
     return null;
   }
 
-  private calculateOptimizationPriority(issue: any): string {
-    if (issue.severity === 'CRITICAL') {
-      return '🔴 HIGH - Address immediately';
-    } else if (issue.severity === 'HIGH') {
-      return '🟡 MEDIUM - Address soon';
-    }
-    return '🟢 LOW - Address when possible';
-  }
+  private formatFlamegraphAnalysis(flamegraph: any): string {
+    let output = '';
 
-  private generateOptimizationSuggestion(func: any): string {
-    const suggestions = {
-      'googletagmanager.com': 'Consider lazy loading GTM or using server-side tagging',
-      'analytics': 'Implement analytics batching or use measurement protocol',
-      'jquery': 'Consider replacing with vanilla JS or modern framework',
-      'lodash': 'Use tree-shaking or replace with native methods',
-      'moment': 'Replace with date-fns or native Date API',
-      'polyfill': 'Audit if polyfills are still needed for target browsers'
-    };
-
-    for (const [key, suggestion] of Object.entries(suggestions)) {
-      if (func.file.toLowerCase().includes(key) || func.function.toLowerCase().includes(key)) {
-        return suggestion;
-      }
+    // Execution Pattern Analysis
+    if (flamegraph.visualSummary?.executionPattern) {
+      output += `### 📊 Execution Pattern\n\n`;
+      output += `**Pattern**: ${flamegraph.visualSummary.executionPattern.pattern}\n`;
+      output += `**Description**: ${flamegraph.visualSummary.executionPattern.description}\n\n`;
     }
 
-    if (func.cpu_percentage > 10) {
-      return 'High CPU usage - consider code splitting, caching, or algorithm optimization';
-    } else if (func.call_count > 1000) {
-      return 'High call frequency - consider memoization or batching';
-    }
+    // Critical Path Analysis
+    if (flamegraph.callStack?.criticalPath) {
+      output += `### 🎯 Critical Execution Path\n\n`;
+      output += `| Function | Self Time | Total Time | CPU % | Location |\n`;
+      output += `|----------|-----------|------------|-------|----------|\n`;
 
-    return 'Monitor for performance regressions and consider optimization if usage increases';
-  }
-
-  private assessLongTaskImpact(task: any): string {
-    if (task.duration > 100) {
-      return 'Severely impacts FCP, LCP, and FID - Critical optimization needed';
-    } else if (task.duration > 50) {
-      return 'Moderately impacts Core Web Vitals - Optimization recommended';
-    }
-    return 'Minor impact on Core Web Vitals - Monitor for increases';
-  }
-
-  private generateCrossReferencedRecommendations(report: any, markdownReport: string | null): string {
-    let recommendations = '';
-
-    // Priority 1: Critical Issues
-    if (report.critical_performance_issues.length > 0) {
-      recommendations += `### 🔴 Priority 1: Critical Issues\n`;
-      report.critical_performance_issues.forEach((issue, index) => {
-        recommendations += `${index + 1}. **${issue.function}** - ${issue.impact}\n`;
+      flamegraph.callStack.criticalPath.forEach((func: any) => {
+        output += `| ${func.function} | ${func.selfTime}ms | ${func.totalTime}ms | ${func.percentage}% | ${func.location} |\n`;
       });
-      recommendations += `\n`;
+      output += `\n`;
     }
 
-    // Priority 2: Long Tasks Optimization
-    if (report.script_performance?.long_running_tasks?.length > 0) {
-      recommendations += `### 🟡 Priority 2: Long Tasks Optimization\n`;
-      recommendations += `- Break up long-running tasks using \`setTimeout\` or \`requestIdleCallback\`\n`;
-      recommendations += `- Implement code splitting for large JavaScript bundles\n`;
-      recommendations += `- Consider web workers for CPU-intensive operations\n\n`;
+    // Hot Paths Analysis
+    if (flamegraph.hotPaths && flamegraph.hotPaths.length > 0) {
+      output += `### 🔥 Hot Execution Paths\n\n`;
+      output += `*Most time-consuming call sequences*\n\n`;
+
+      flamegraph.hotPaths.forEach((hotPath: any, index: number) => {
+        output += `**${index + 1}. Path (${hotPath.percentage}% CPU, ${hotPath.totalTime}ms)**\n`;
+        output += `\`\`\`\n${hotPath.path.join(' → ')}\`\`\`\n\n`;
+      });
     }
 
-    // Priority 3: High Impact Functions
-    if (report.high_impact_functions.length > 0) {
-      recommendations += `### 🟢 Priority 3: Function-Level Optimizations\n`;
-      const topFunction = report.high_impact_functions[0];
-      recommendations += `- Focus on optimizing \`${topFunction.function}\` (${topFunction.cpu_percentage}% CPU usage)\n`;
-      recommendations += `- Consider caching, memoization, or algorithm improvements\n`;
-      recommendations += `- Profile individual function calls for micro-optimizations\n\n`;
+    // CPU Distribution
+    if (flamegraph.visualSummary?.topCPUConsumers) {
+      output += `### ⚡ CPU Time Distribution\n\n`;
+      output += `| Function | CPU % | Visual Weight |\n`;
+      output += `|----------|-------|---------------|\n`;
+
+      flamegraph.visualSummary.topCPUConsumers.forEach((consumer: any) => {
+        const bars = '█'.repeat(Math.max(1, Math.floor(consumer.visualWeight / 5)));
+        output += `| ${consumer.name} | ${consumer.percentage}% | ${bars} |\n`;
+      });
+      output += `\n`;
     }
 
-    // Web Vitals Specific Recommendations
-    if (markdownReport && markdownReport.includes('needs-improvement')) {
-      recommendations += `### 📊 Core Web Vitals Improvements\n`;
-      if (markdownReport.includes('First Contentful Paint')) {
-        recommendations += `- **FCP Optimization**: Reduce render-blocking resources, optimize critical rendering path\n`;
+    // Function Hierarchy
+    if (flamegraph.functionHierarchy?.rootFunctions) {
+      output += `### 🌳 Function Call Hierarchy\n\n`;
+      output += `**Root Functions** (Entry points):\n`;
+      flamegraph.functionHierarchy.rootFunctions.forEach((root: any) => {
+        output += `- **${root.name}** (${root.selfTime}ms self time)\n`;
+      });
+      output += `\n`;
+
+      if (flamegraph.functionHierarchy.leafFunctions?.length > 0) {
+        output += `**Leaf Functions** (Terminal functions):\n`;
+        flamegraph.functionHierarchy.leafFunctions.slice(0, 5).forEach((leaf: any) => {
+          output += `- **${leaf.functionName}** (${leaf.selfTime}ms, ${leaf.percentage}% CPU)\n`;
+        });
+        output += `\n`;
       }
-      if (markdownReport.includes('Largest Contentful Paint')) {
-        recommendations += `- **LCP Optimization**: Optimize largest content element, improve server response times\n`;
-      }
-      recommendations += `\n`;
     }
 
-    return recommendations;
+    // LLM Analysis Prompt
+    output += `### 🤖 LLM Analysis Context\n\n`;
+    output += `Look at all the data provided above to identify optimization opportunities that contains web performance metrics, CPU profile analysis, and script execution analysis.\n`;
+    output += `Suggest performance optimization opportunities and provide even code examples to handle the hot functions.\n\n`;
+    return output;
   }
 }

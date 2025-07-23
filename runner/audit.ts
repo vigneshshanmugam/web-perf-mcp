@@ -1,5 +1,5 @@
 import puppeteer, { Browser, CDPSession, Page } from "puppeteer";
-import { Config, OutputMode, startFlow, Result, FlowResult } from "lighthouse";
+import { Config, OutputMode, startFlow, FlowResult } from "lighthouse";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from './types.js';
@@ -36,8 +36,8 @@ export class AuditRunner {
       await this.saveResults(markdown);
       return markdown;
     } catch (error) {
-      console.error(`Audit failed:`, error.message);
-      throw new Error(`Audit failed: ${error.message}`);
+      console.error(`Audit failed:`, error);
+      throw error;
     }
   }
 
@@ -244,8 +244,8 @@ export class AuditRunner {
           .sort((a: any, b: any) => b.duration - a.duration)
           .forEach((task: any) => {
             const impact = task.duration > 100 ? '🔴 Critical' : task.duration > 50 ? '🟡 High' : '🟢 Medium';
-            const hostname = task.url ? new URL(task.url).hostname : 'Unknown';
-            markdown += `| ${hostname} | ${task.startTime.toFixed(1)}ms | ${task.duration.toFixed(1)}ms | ${impact} |\n`;
+            const url = task.url ?? 'Unknown';
+            markdown += `| ${url} | ${task.startTime.toFixed(1)}ms | ${task.duration.toFixed(1)}ms | ${impact} |\n`;
           });
       } else {
         markdown += `## ✅ Long Tasks Analysis\n\n`;

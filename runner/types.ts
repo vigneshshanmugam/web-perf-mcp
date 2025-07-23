@@ -1,5 +1,13 @@
 import { Result } from "lighthouse";
 
+
+export interface TestConfig {
+  url: string;
+  device?: 'desktop' | 'mobile';
+  profile?: boolean;
+  headless?: boolean;
+}
+
 export interface MetricRating {
   value: number;
   rating: 'good' | 'needs-improvement' | 'poor' | 'unknown';
@@ -19,12 +27,62 @@ export interface PerformanceMetrics {
   longTasks: Result["audits"]["long-tasks"];
 }
 
-export interface TestConfig {
-  url: string;
-  device?: 'desktop' | 'mobile';
-  profile?: boolean;
-  headless?: boolean;
+// CPU Profile Analysis
+export interface CPUProfileAnalysis {
+  executive_summary: {
+    total_execution_time_ms: number;
+    total_samples: number;
+    sample_interval_ms: number;
+  };
+
+  high_impact_functions: Array<{
+    function: string;
+    file: string;
+    execution_time_ms: number;
+    cpu_percentage: string;
+    call_count: number;
+    location: string;
+    originalFile?: string;
+    originalLine?: number;
+    originalColumn?: number;
+    originalName?: string | null;
+    isSourceMapped?: boolean;
+  }>;
+  script_performance: {
+    script_execution_analysis: Array<{
+      type: string;
+      duration: number;
+      url: string;
+      startTime: number;
+    }>;
+  };
+  flamegraph_analysis?: {
+    callStack: {
+      deepestStacks: Array<{ depth: number, path: string[] }>;
+      mostFrequentPaths: Array<{ path: string[], frequency: number }>;
+      criticalPath: Array<{
+        function: string;
+        selfTime: number;
+        totalTime: number;
+        percentage: string;
+        location: string;
+      }>;
+    };
+    hotPaths: Array<{ path: string[], totalTime: number, percentage: string }>;
+    functionHierarchy: {
+      rootFunctions: Array<{ name: string, selfTime: number, children: Array<{ name: string, selfTime: number }> }>;
+      leafFunctions: Array<any>;
+    };
+    visualSummary: {
+      totalExecutionTime: number;
+      topCPUConsumers: Array<{ name: string, percentage: string, visualWeight: number }>;
+      bottleneckDistribution: Array<{ severity: string, function: string, impact: string }>;
+      executionPattern: { pattern: string, description: string };
+    };
+  };
+  sourceMapDebug?: string[];
 }
+
 
 export interface CPUProfileNode {
   id: number;
@@ -59,4 +117,9 @@ export interface AggregatedFunction {
   totalTime: number;
   hitCount: number;
   percentage: string;
+  originalFile?: string;
+  originalLine?: number;
+  originalColumn?: number;
+  originalName?: string | null;
+  isSourceMapped?: boolean;
 }

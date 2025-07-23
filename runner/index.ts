@@ -22,8 +22,8 @@ program
       headless: options.headless,
     });
     try {
-      const results = await runner.runAudit(options.url);
-      console.log(JSON.stringify(results, null, 2));
+      const markdown = await runner.runAudit(options.url);
+      console.log(markdown);
     } catch (error) {
       console.error("Performance audit failed:", error);
       process.exit(1);

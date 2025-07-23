@@ -19,9 +19,11 @@
   "author": "",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/source-map": "^0.5.7",
     "commander": "^14.0.0",
     "lighthouse": "^12.8.0",
-    "puppeteer": "^24.14.0"
+    "puppeteer": "^24.14.0",
+    "source-map": "^0.7.4"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
