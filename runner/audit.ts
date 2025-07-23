@@ -4,10 +4,28 @@ import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from './types.js';
 
+async function handleKibanaLogin(page: Page, url: string) {
+  await page.setRequestInterception(true);
+  page.on('request', async (request) => {
+    if (request.url().includes('/login') && request.method() === 'POST') {
+      request.continue();
+    } else {
+      request.continue();
+    }
+  });
+  const baseURL = new URL(url);
+  const kbnPath = baseURL.pathname.split('/')[1];
+  await page.goto(`${baseURL.origin}/${kbnPath}/login`, { waitUntil: 'load' });
+  await page.locator("[data-test-subj='loginUsername']").fill("elastic");
+  await page.locator("[data-test-subj='loginPassword']").fill("changeme");
+  await page.locator("[data-test-subj='loginSubmit']").click();
+  await page.waitForNavigation();
+}
+
 export class AuditRunner {
   options: TestConfig;
   deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
-  private outputDir = join(process.cwd(), 'audit-results');
+  private outputDir = join(process.cwd(), 'results');
 
   constructor(options = {}) {
     this.options = {
@@ -49,7 +67,7 @@ export class AuditRunner {
     try {
       // Launch Chrome with Puppeteer directly
       browser = await puppeteer.launch({
-        headless: true,
+        headless: this.options.headless,
         args: [
           "--disable-gpu",
           "--no-sandbox",
@@ -59,6 +77,10 @@ export class AuditRunner {
       });
       page = await browser.newPage();
       session = await page.createCDPSession();
+
+      if (url.includes('localhost:5601')) {
+        await handleKibanaLogin(page, url);
+      }
 
       if (this.options.profile) {
         await session.send('Profiler.enable');
@@ -98,9 +120,8 @@ export class AuditRunner {
 
       await mkdir(this.outputDir, { recursive: true });
       // Save trace events and CPU profile
-      const timestamp = Date.now();
       if (traceEvents) {
-        const tracePath = join(this.outputDir, `trace-events-${timestamp}.json`);
+        const tracePath = join(this.outputDir, `trace-events.json`);
         await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
         console.log(`✅ Trace events saved to ${tracePath}`);
       }
@@ -109,7 +130,7 @@ export class AuditRunner {
       if (session && this.options.profile) {
         try {
           const { profile } = await session.send('Profiler.stop');
-          const profilePath = join(this.outputDir, `cpu-profile-${timestamp}.cpuprofile`);
+          const profilePath = join(this.outputDir, `cpu-profile.json`);
           await writeFile(profilePath, JSON.stringify(profile, null, 2));
           console.log(`✅ CPU profile saved to ${profilePath}`);
         } catch (error) {
@@ -258,7 +279,7 @@ export class AuditRunner {
   private async saveResults(markdown: string): Promise<void> {
     try {
       await mkdir(this.outputDir, { recursive: true });
-      const markdownPath = join(this.outputDir, 'performance-audit-report.md');
+      const markdownPath = join(this.outputDir, 'report.md');
       await writeFile(markdownPath, markdown, 'utf-8');
       console.log(`✅ Markdown report saved to ${markdownPath}`);
     } catch (error) {

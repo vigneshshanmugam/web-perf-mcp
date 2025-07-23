@@ -14,12 +14,11 @@ program
   .option("--device <device>", "Device type (desktop|mobile)", "desktop")
   .option("--profile", "Enable CPU profiling", false)
   .option("--headless", "Run in headless mode", true)
-  .option("--output <file>", "Save results to file")
   .action(async (options) => {
     const runner = new AuditRunner({
       device: options.device,
       profile: options.profile,
-      headless: options.headless,
+      headless: false,
     });
     try {
       const markdown = await runner.runAudit(options.url);

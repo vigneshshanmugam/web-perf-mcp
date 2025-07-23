@@ -3,7 +3,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Artifacts } from 'lighthouse';
 import type { CPUProfile, CPUProfileNode, AggregatedFunction, CPUProfileAnalysis } from './types';
-import { SourceMapResolver } from './resolver';
+import { SourceMapResolver } from './resolver.js';
 
 class CPUProfileAnalyzer {
   sourceMapResolver = new SourceMapResolver();
@@ -128,13 +128,9 @@ class CPUProfileAnalyzer {
       percentage: totalTime > 0 ? (((node.selfTime || 0) / totalTime) * 100).toFixed(2) : '0.00'
     }));
 
-    // Resolve source maps for better analysis
     await this.resolveSourceMapsForTopFunctions();
   }
 
-  /**
-   * Resolve source maps for top functions to get original source locations
-   */
   private async resolveSourceMapsForTopFunctions(): Promise<void> {
     try {
       const locationsToResolve = this.analysisResults.topFunctions.map(func => ({
@@ -172,12 +168,8 @@ class CPUProfileAnalyzer {
     const collapsedSamples: number[] = [];
     const sampleTimes: number[] = [];
 
-    // The first delta is relative to the profile startTime.
-    // Ref: https://github.com/v8/v8/blob/44bd8fd7/src/inspector/js_protocol.json#L1485
     let elapsed = timeDeltas[0];
 
-    // Prevents negative time deltas from causing bad data. See
-    // https://github.com/jlfwong/speedscope/pull/305 for details.
     let lastValidElapsed = elapsed;
     let lastNodeId = NaN;
 
@@ -242,7 +234,7 @@ class CPUProfileAnalyzer {
     });
   }
 
-  // Speedscope's exact function filtering logic
+  // Speedscope's exact function filtering logic + Lighthouse omission
   shouldIgnoreFunction(callFrame: any): boolean {
     const { functionName, url } = callFrame;
 
@@ -432,7 +424,6 @@ class CPUProfileAnalyzer {
   }
 
   private findDeepestCallStacks(): Array<{ depth: number, path: string[] }> {
-    // This would require building the full call tree, simplified for now
     return [
       {
         depth: 5,
@@ -442,7 +433,6 @@ class CPUProfileAnalyzer {
   }
 
   private findMostFrequentCallPaths(): Array<{ path: string[], frequency: number }> {
-    // Simplified implementation - would need full call graph analysis
     const { topFunctions } = this.analysisResults;
 
     return topFunctions.slice(0, 3).map(func => ({
@@ -452,17 +442,14 @@ class CPUProfileAnalyzer {
   }
 
   private buildCallPath(func: AggregatedFunction): AggregatedFunction[] {
-    // Simplified - would need parent relationship tracking
     return [func];
   }
 
   private findChildFunctions(parentFunc: AggregatedFunction): Array<{ name: string, selfTime: number }> {
-    // Simplified - would need actual parent-child relationships
     return [];
   }
 
   private isLeafFunction(func: AggregatedFunction): boolean {
-    // Simplified check - a leaf function typically has high self time relative to total time
     return func.selfTime > (func.totalTime * 0.8);
   }
 
@@ -523,15 +510,10 @@ class CPUProfileAnalyzer {
     };
   }
 
-  saveReport(report, outputPath) {
+  saveReport(report: CPUProfileAnalysis, outputPath: string) {
     const formattedReport = {
       ...report,
       generated_at: new Date().toISOString(),
-      analysis_metadata: {
-        version: '1.0.0',
-        analyzer: 'CPU Profile Analyzer',
-        data_source: 'Lighthouse CPU Profile + Trace Events'
-      }
     };
 
     writeFileSync(outputPath, JSON.stringify(formattedReport, null, 2));

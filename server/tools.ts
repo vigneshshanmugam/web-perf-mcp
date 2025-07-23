@@ -12,12 +12,6 @@ export const TOOL_DEFINITIONS = [
           default: 'desktop',
           description: 'Device type for emulation'
         },
-        networkThrottling: {
-          type: 'string',
-          enum: ['fast3g', 'slow3g'],
-          default: 'fast3g',
-          description: 'Network throttling simulation'
-        },
         profile: {
           type: 'boolean',
           default: true,

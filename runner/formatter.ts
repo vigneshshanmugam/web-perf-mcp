@@ -65,7 +65,7 @@ export default class Formatter {
 
   private async loadMarkdownReport(): Promise<string | null> {
     try {
-      const reportPath = join(process.cwd(), 'audit-results', 'performance-audit-report.md');
+      const reportPath = join(process.cwd(), 'results', 'report.md');
       if (existsSync(reportPath)) {
         return await readFile(reportPath, 'utf-8');
       }
@@ -142,7 +142,7 @@ export default class Formatter {
     // LLM Analysis Prompt
     output += `### 🤖 LLM Analysis Context\n\n`;
     output += `Look at all the data provided above to identify optimization opportunities that contains web performance metrics, CPU profile analysis, and script execution analysis.\n`;
-    output += `Suggest performance optimization opportunities and provide even code examples to handle the hot functions.\n\n`;
+    output += `Suggest performance optimization techniques and provide alternate code to handle the hot functions.\n\n`;
     return output;
   }
 }
