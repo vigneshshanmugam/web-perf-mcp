@@ -1,3 +1,4 @@
+import { Result } from "lighthouse";
 
 export interface MetricRating {
   value: number;
@@ -15,6 +16,7 @@ export interface PerformanceMetrics {
     ttfb: MetricRating;
   };
   performanceScore: number;
+  longTasks: Result["audits"]["long-tasks"];
 }
 
 export interface TestConfig {
@@ -24,9 +26,11 @@ export interface TestConfig {
   headless?: boolean;
 }
 
-
 export interface CPUProfileNode {
   id: number;
+  selfTime: number;
+  totalTime: number;
+  parent: CPUProfileNode | null;
   callFrame: {
     functionName: string;
     url: string;

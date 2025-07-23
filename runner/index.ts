@@ -3,6 +3,7 @@
 import { program } from "commander";
 import { AuditRunner } from './audit.js';
 import CPUProfileAnalyzer from "./analyzer.js";
+import Formatter from "./formatter.js";
 
 program
   .command("audit")
@@ -38,11 +39,9 @@ program
     try {
       const analyzer = new CPUProfileAnalyzer();
       const report = await analyzer.analyzeCPUProfile(options.profile, options.trace);
-      console.log('\n=== QUICK ANALYSIS ===');
-      console.log(`Performance Score: ${report.executive_summary.performance_score}/100`);
-      console.log(`Total Execution Time: ${report.executive_summary.total_execution_time_ms}ms`);
-      console.log(`Critical Issues Found: ${report.critical_performance_issues.length}`);
-      console.log(`Top CPU Consumer: ${report.high_impact_functions[0]?.function || 'N/A'}`);
+      const formatter = new Formatter();
+      const formattedAnalysis = await formatter.formatStructuredAnalysis(report);
+      console.log(formattedAnalysis);
     } catch (error) {
       console.error('Analysis failed:', error);
       process.exit(1);

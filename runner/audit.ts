@@ -1,5 +1,5 @@
 import puppeteer, { Browser, CDPSession, Page } from "puppeteer";
-import { Config, OutputMode, startFlow } from "lighthouse";
+import { Config, OutputMode, startFlow, Result, FlowResult } from "lighthouse";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from './types.js';
@@ -28,12 +28,13 @@ export class AuditRunner {
     };
   }
 
-  async runAudit(url: string): Promise<PerformanceMetrics> {
+  async runAudit(url: string): Promise<string> {
     console.log(`Starting performance audit for: ${url}`);
     try {
       const result = await this.runSingleTest(url);
-      await this.saveResults(result);
-      return result;
+      const markdown = this.generateMarkdown(result);
+      await this.saveResults(markdown);
+      return markdown;
     } catch (error) {
       console.error(`Audit failed:`, error.message);
       throw new Error(`Audit failed: ${error.message}`);
@@ -127,7 +128,7 @@ export class AuditRunner {
     }
   }
 
-  private combineResults(lighthouseResult: any, url: string): PerformanceMetrics {
+  private combineResults(lighthouseResult: FlowResult.Step, url: string): PerformanceMetrics {
     if (!lighthouseResult || !lighthouseResult.lhr) {
       throw new Error("Invalid Lighthouse result");
     }
@@ -162,24 +163,106 @@ export class AuditRunner {
         cls: getCoreWebVital("cumulative-layout-shift"),
         ttfb: getCoreWebVital("server-response-time"),
       },
+      longTasks: lhr.audits['long-tasks'],
     };
   }
 
+  generateMarkdown(result: PerformanceMetrics): string {
+    let markdown = `# Performance Audit Report\n\n`;
+    markdown += `**URL**: ${result.url}\n`;
+    markdown += `**Audit Date**: ${new Date(result.timestamp).toLocaleString()}\n`;
+    markdown += `**Performance Score**: ${result.performanceScore}/100\n\n`;
 
+    // Core Web Vitals Analysis
+    markdown += `## Core Web Vitals Analysis\n\n`;
+    markdown += `| Metric | Value | Rating | Percentile | Status |\n`;
+    markdown += `|--------|-------|--------|------------|--------|\n`;
 
-  private async saveResults(results: PerformanceMetrics): Promise<void> {
-    try {
-      await mkdir(this.outputDir, { recursive: true });
-      const resultsPath = join(this.outputDir, 'performance-results.json');
-      await writeFile(resultsPath, JSON.stringify(results, null, 2));
-      console.log(`✅ Performance results saved to ${resultsPath}`);
-      console.log(`✅ All audit files saved to: ${this.outputDir}`);
-    } catch (error) {
-      console.warn('Failed to save results:', error.message);
+    const getStatusEmoji = (rating: string) => {
+      switch (rating) {
+        case 'good': return '✅';
+        case 'needs-improvement': return '⚠️';
+        case 'poor': return '❌';
+        default: return '❓';
+      }
+    };
+
+    const vitals = [
+      { name: 'First Contentful Paint (FCP)', key: 'fcp', unit: 'ms' },
+      { name: 'Largest Contentful Paint (LCP)', key: 'lcp', unit: 'ms' },
+      { name: 'Cumulative Layout Shift (CLS)', key: 'cls', unit: '' },
+      { name: 'Time to First Byte (TTFB)', key: 'ttfb', unit: 'ms' }
+    ];
+
+    vitals.forEach(vital => {
+      const metric = result.coreWebVitals[vital.key];
+      if (metric) {
+        const status = getStatusEmoji(metric.rating);
+        markdown += `| ${vital.name} | ${metric.value}${vital.unit} | ${metric.rating} | ${metric.percentile}% | ${status} |\n`;
+      }
+    });
+
+    markdown += `\n`;
+
+    const issues = [];
+    vitals.forEach(vital => {
+      const metric = result.coreWebVitals[vital.key];
+      if (metric && metric.rating !== 'good') {
+        issues.push(`**${vital.name}**: ${metric.value}${vital.unit} (${metric.rating})`);
+      }
+    });
+
+    if (issues.length > 0) {
+      markdown += `## 🚨 Performance Issues Detected\n\n`;
+      issues.forEach(issue => markdown += `- ${issue}\n`);
+      markdown += `\n`;
     }
+
+    if (result.longTasks && result.longTasks.details && (result.longTasks.details as any).items) {
+      const longTaskItems = (result.longTasks.details as any).items;
+
+      if (longTaskItems.length > 0) {
+        markdown += `## 🐌 Long Tasks Analysis\n\n`;
+        markdown += `⚠️ **${longTaskItems.length} long task(s) detected** - These block the main thread and hurt user experience.\n\n`;
+
+        // Summary statistics
+        const totalDuration = longTaskItems.reduce((sum: number, task: any) => sum + task.duration, 0);
+        const avgDuration = totalDuration / longTaskItems.length;
+        const maxDuration = Math.max(...longTaskItems.map((task: any) => task.duration));
+
+        markdown += `### Summary\n`;
+        markdown += `- **Total blocking time**: ${totalDuration.toFixed(1)}ms\n`;
+        markdown += `- **Average task duration**: ${avgDuration.toFixed(1)}ms\n`;
+        markdown += `- **Longest task**: ${maxDuration.toFixed(1)}ms\n\n`;
+
+        // Task details table
+        markdown += `### Task Details\n\n`;
+        markdown += `| URL | Start Time | Duration | Impact |\n`;
+        markdown += `|-----|------------|----------|--------|\n`;
+
+        longTaskItems
+          .sort((a: any, b: any) => b.duration - a.duration)
+          .forEach((task: any) => {
+            const impact = task.duration > 100 ? '🔴 Critical' : task.duration > 50 ? '🟡 High' : '🟢 Medium';
+            const hostname = task.url ? new URL(task.url).hostname : 'Unknown';
+            markdown += `| ${hostname} | ${task.startTime.toFixed(1)}ms | ${task.duration.toFixed(1)}ms | ${impact} |\n`;
+          });
+      } else {
+        markdown += `## ✅ Long Tasks Analysis\n\n`;
+        markdown += `**No long tasks detected** - Main thread blocking is minimal.\n\n`;
+      }
+    }
+    return markdown;
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private async saveResults(markdown: string): Promise<void> {
+    try {
+      await mkdir(this.outputDir, { recursive: true });
+      const markdownPath = join(this.outputDir, 'performance-audit-report.md');
+      await writeFile(markdownPath, markdown, 'utf-8');
+      console.log(`✅ Markdown report saved to ${markdownPath}`);
+    } catch (error) {
+      console.error('Error saving results:', error);
+    }
   }
 }

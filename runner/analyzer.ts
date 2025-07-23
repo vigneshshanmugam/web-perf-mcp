@@ -1,13 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from 'node:path';
-import { AggregatedFunction, CPUProfile } from './types';
+import { AggregatedFunction, CPUProfile, CPUProfileNode } from './types';
 
 class CPUProfileAnalyzer {
   analysisResults = {
     summary: {},
-    longTasks: [],
-    topFunctions: [],
+    topFunctions: [] as AggregatedFunction[],
     performanceBottlenecks: [],
     scriptAnalysis: [],
     recommendations: [],
@@ -53,67 +52,196 @@ class CPUProfileAnalyzer {
       throw new Error('Invalid CPU profile format');
     }
 
-    const totalSamples = samples.length;
-    const sampleInterval = cpuProfile.sampleInterval || 1000; // microseconds
-    const totalTime = timeDeltas ? timeDeltas.reduce((sum, delta) => sum + delta, 0) : totalSamples * sampleInterval;
-
-    this.analysisResults.rawData = {
-      totalSamples,
-      totalTime: totalTime / 1000, // Convert to milliseconds
-      sampleInterval: sampleInterval / 1000, // Convert to milliseconds
-      duration: endTime && startTime ? (endTime - startTime) / 1000 : totalTime / 1000
-    };
-
-    // Build node map for quick lookup
-    const nodeMap = new Map();
+    // Build node relationships using Speedscope approach
+    const nodeById = new Map<number, CPUProfileNode>();
     nodes.forEach(node => {
-      nodeMap.set(node.id, {
+      nodeById.set(node.id, {
         ...node,
         selfTime: 0,
         totalTime: 0,
         hitCount: 0,
+        parent: null,
         children: node.children || []
       });
     });
 
-    // Calculate hit counts and times for each function
-    samples.forEach((sampleNodeId, index) => {
-      const timeDelta = timeDeltas ? timeDeltas[index] : sampleInterval;
-
-      if (nodeMap.has(sampleNodeId)) {
-        const node = nodeMap.get(sampleNodeId);
-        node.hitCount++;
-        node.selfTime += timeDelta;
+    // Establish parent-child relationships
+    nodes.forEach(node => {
+      if (node.children) {
+        node.children.forEach(childId => {
+          const child = nodeById.get(childId);
+          if (child) {
+            child.parent = nodeById.get(node.id);
+          }
+        });
       }
     });
 
-    // Calculate total time including children
-    this.calculateTotalTimes(nodeMap, nodes);
+    // Process samples using Speedscope's improved algorithm
+    const { processedSamples, sampleTimes } = this.processSamplesWithSpeedscope(samples, timeDeltas, startTime);
 
-    // Extract top functions by self time, excluding Lighthouse internal functions
-    const sortedFunctions = Array.from(nodeMap.values())
+    // Calculate self times using the processed samples
+    const selfTimes = new Map();
+    processedSamples.forEach((nodeId, index) => {
+      if (!selfTimes.has(nodeId)) {
+        selfTimes.set(nodeId, 0);
+      }
+      const timeDelta = index < sampleTimes.length - 1
+        ? sampleTimes[index + 1] - sampleTimes[index]
+        : 0;
+      selfTimes.set(nodeId, selfTimes.get(nodeId) + timeDelta);
+    });
+
+    // Update node times and hit counts
+    selfTimes.forEach((time, nodeId) => {
+      const node = nodeById.get(nodeId);
+      if (node) {
+        node.selfTime = time;
+        node.hitCount = processedSamples.filter(id => id === nodeId).length;
+      }
+    });
+
+    const totalTime = sampleTimes.length > 0 ? sampleTimes[sampleTimes.length - 1] - sampleTimes[0] : 0;
+
+    this.analysisResults.rawData = {
+      totalSamples: samples.length,
+      totalTime: totalTime / 1000, // Convert to milliseconds
+      sampleInterval: (cpuProfile.sampleInterval || 1000) / 1000, // Convert to milliseconds
+      duration: endTime && startTime ? (endTime - startTime) / 1000000 : totalTime / 1000
+    };
+
+    // Calculate total time including children using improved algorithm
+    this.calculateTotalTimesSpeedscope(nodeById);
+
+    // Extract top functions, filtering out Chrome internals
+    const sortedFunctions = Array.from(nodeById.values())
       .filter(node => {
         if (node.hitCount === 0) return false;
-        const url = node.callFrame.url || '';
-        if (url.includes('_lighthouse-eval.js')) return false;
-        return true;
+        const callFrame = node.callFrame;
+        return !this.shouldIgnoreFunction(callFrame);
       })
       .sort((a, b) => b.selfTime - a.selfTime)
       .slice(0, 20);
 
     this.analysisResults.topFunctions = sortedFunctions.map(node => ({
-      functionName: node.callFrame.functionName || '(anonymous)',
+      functionName: this.getDisplayName(node.callFrame),
       url: node.callFrame.url || '(unknown)',
-      lineNumber: node.callFrame.lineNumber || 0,
-      columnNumber: node.callFrame.columnNumber || 0,
-      selfTime: Math.round(node.selfTime / 1000), // Convert to ms
-      totalTime: Math.round(node.totalTime / 1000), // Convert to ms
+      lineNumber: (node.callFrame.lineNumber || 0) + 1,
+      columnNumber: (node.callFrame.columnNumber || 0) + 1,
+      selfTime: Math.round(node.selfTime / 1000),
+      totalTime: Math.round(node.totalTime / 1000),
       hitCount: node.hitCount,
-      percentage: ((node.selfTime / totalTime) * 100).toFixed(2)
+      percentage: totalTime > 0 ? ((node.selfTime / totalTime) * 100).toFixed(2) : '0.00'
     }));
 
     // Identify performance bottlenecks
-    this.identifyBottlenecks(nodeMap, totalTime);
+    this.identifyBottlenecks(nodeById, totalTime);
+  }
+
+  // Speedscope-inspired sample processing
+  processSamplesWithSpeedscope(samples: number[], timeDeltas: number[] | undefined, startTime: number) {
+    const processedSamples: number[] = [];
+    const sampleTimes: number[] = [];
+
+    // The first delta is relative to the profile startTime
+    let elapsed = timeDeltas ? timeDeltas[0] : 1000; // Default 1ms if no deltas
+    let lastValidElapsed = elapsed;
+    let lastNodeId = NaN;
+
+    // Collapse identical samples to save processing time
+    for (let i = 0; i < samples.length; i++) {
+      const nodeId = samples[i];
+      if (nodeId !== lastNodeId) {
+        processedSamples.push(nodeId);
+        if (elapsed < lastValidElapsed) {
+          sampleTimes.push(lastValidElapsed);
+        } else {
+          sampleTimes.push(elapsed);
+          lastValidElapsed = elapsed;
+        }
+      }
+
+      if (i === samples.length - 1) {
+        if (!isNaN(lastNodeId)) {
+          processedSamples.push(lastNodeId);
+          if (elapsed < lastValidElapsed) {
+            sampleTimes.push(lastValidElapsed);
+          } else {
+            sampleTimes.push(elapsed);
+            lastValidElapsed = elapsed;
+          }
+        }
+      } else {
+        const timeDelta = timeDeltas ? timeDeltas[i + 1] : 1000;
+        elapsed += timeDelta;
+        lastNodeId = nodeId;
+      }
+    }
+
+    return { processedSamples, sampleTimes };
+  }
+
+  // Improved total time calculation
+  calculateTotalTimesSpeedscope(nodeById: Map<number, any>) {
+    const visited = new Set();
+
+    const calculateTotal = (nodeId: number): number => {
+      if (visited.has(nodeId)) return 0;
+      visited.add(nodeId);
+
+      const node = nodeById.get(nodeId);
+      if (!node) return 0;
+
+      let totalTime = node.selfTime;
+      if (node.children) {
+        for (const childId of node.children) {
+          totalTime += calculateTotal(childId);
+        }
+      }
+      node.totalTime = totalTime;
+      return totalTime;
+    };
+
+    // Calculate for all nodes
+    nodeById.forEach((node, nodeId) => {
+      if (!visited.has(nodeId)) {
+        calculateTotal(nodeId);
+      }
+    });
+  }
+
+  // Speedscope function filtering
+  shouldIgnoreFunction(callFrame: any): boolean {
+    const { functionName, url } = callFrame;
+
+    if (url === 'native dummy.js') {
+      // V8 internal implementation detail
+      return true;
+    }
+
+    if (url && url.includes('_lighthouse-eval.js')) {
+      // Lighthouse internal functions
+      return true;
+    }
+
+    return functionName === '(root)';
+  }
+
+  // Improved display name generation
+  getDisplayName(callFrame: any): string {
+    const { functionName, url, lineNumber } = callFrame;
+
+    if (functionName && functionName !== '') {
+      return functionName;
+    }
+
+    if (url) {
+      const fileName = url.split('/').pop() || 'unknown';
+      const line = lineNumber ? lineNumber + 1 : 0; // Convert to 1-based
+      return `(anonymous ${fileName}:${line})`;
+    }
+
+    return '(anonymous)';
   }
 
   calculateTotalTimes(nodeMap: Map<number, any>, nodes: any[]) {
@@ -168,23 +296,6 @@ class CPUProfileAnalyzer {
   }
 
   analyzeTraceEvents(traceEvents) {
-    // Analyze long tasks (>50ms)
-    const longTasks = traceEvents
-      .filter(event =>
-        event.ph === 'X' && // Complete events
-        event.dur > 50000 && // >50ms in microseconds
-        event.cat && event.cat.includes('devtools.timeline')
-      )
-      .map(event => ({
-        name: event.name,
-        duration: Math.round(event.dur / 1000), // Convert to ms
-        startTime: Math.round(event.ts / 1000),
-        category: event.cat,
-        args: event.args
-      }))
-      .sort((a, b) => b.duration - a.duration)
-      .slice(0, 10);
-
     // Analyze script execution
     const scriptEvents = traceEvents
       .filter(event =>
@@ -199,7 +310,6 @@ class CPUProfileAnalyzer {
         startTime: Math.round(event.ts / 1000)
       }));
 
-    this.analysisResults.longTasks = longTasks;
     this.analysisResults.scriptAnalysis = scriptEvents.slice(0, 15);
   }
 
@@ -222,7 +332,7 @@ class CPUProfileAnalyzer {
   }
 
   generateLLMReport() {
-    const { rawData, topFunctions, performanceBottlenecks, longTasks, scriptAnalysis } = this.analysisResults;
+    const { rawData, topFunctions, performanceBottlenecks, scriptAnalysis } = this.analysisResults;
 
     return {
       executive_summary: {
@@ -242,7 +352,6 @@ class CPUProfileAnalyzer {
         location: `${func.url}:${func.lineNumber}`
       })),
       script_performance: {
-        long_running_tasks: longTasks || [],
         script_execution_analysis: scriptAnalysis || []
       },
       llm_analysis_prompt: this.generateLLMPrompt()
