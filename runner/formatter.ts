@@ -166,7 +166,8 @@ export default class Formatter {
       { name: 'First Contentful Paint (FCP)', key: 'fcp', unit: 'ms' },
       { name: 'Largest Contentful Paint (LCP)', key: 'lcp', unit: 'ms' },
       { name: 'Cumulative Layout Shift (CLS)', key: 'cls', unit: '' },
-      { name: 'Time to First Byte (TTFB)', key: 'ttfb', unit: 'ms' }
+      { name: 'Time to First Byte (TTFB)', key: 'ttfb', unit: 'ms' },
+      { name: 'Total Blocking Time (TBT)', key: 'tbt', unit: 'ms' }
     ];
 
     vitals.forEach(vital => {

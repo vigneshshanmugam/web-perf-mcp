@@ -22,6 +22,7 @@ export interface PerformanceMetrics {
     lcp: MetricRating;
     cls: MetricRating;
     ttfb: MetricRating;
+    tbt: MetricRating;
   };
   performanceScore: number;
   longTasks: Result["audits"]["long-tasks"];

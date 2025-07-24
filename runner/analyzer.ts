@@ -62,6 +62,7 @@ class CPUProfileAnalyzer {
             longTaskItems[index].column = location.originalColumn;
           }
         });
+        report.longTasks.details['items'] = longTaskItems;
       }
     }
     return report;

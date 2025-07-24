@@ -31,14 +31,11 @@ export class PerformanceHandlers {
     const { cpuProfilePath, traceEventsPath } = args;
     try {
       const analyzer = new CPUProfileAnalyzer();
-      const report = await analyzer.analyzeCPUProfile(cpuProfilePath, traceEventsPath);
+      const cpuReport = await analyzer.analyzeCPUProfile(cpuProfilePath, traceEventsPath);
       const auditReportPath = join(outputDir, 'report.json');
-      if (!existsSync(auditReportPath)) {
-        throw new Error('Audit report not found, run audit first');
-      }
-      const auditReport = await analyzer.loadAuditReport(auditReportPath);
+      const auditReport = await analyzer.analyzeAuditReport(auditReportPath);
       const formatter = new Formatter();
-      const formattedAnalysis = await formatter.formatAnalysis(report, auditReport);
+      const formattedAnalysis = formatter.formatAnalysis(cpuReport, auditReport);
       return {
         content: [
           {

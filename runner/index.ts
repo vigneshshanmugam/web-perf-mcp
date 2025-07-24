@@ -23,8 +23,8 @@ program
       headless: options.headless,
     });
     try {
-      const markdown = await runner.runAudit(options.url);
-      console.log(markdown);
+      const report = await runner.runAudit(options.url);
+      console.log(report);
     } catch (error) {
       console.error("Performance audit failed:", error);
       process.exit(1);

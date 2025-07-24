@@ -184,6 +184,7 @@ export class AuditRunner {
         lcp: getCoreWebVital("largest-contentful-paint"),
         cls: getCoreWebVital("cumulative-layout-shift"),
         ttfb: getCoreWebVital("server-response-time"),
+        tbt: getCoreWebVital("total-blocking-time"),
       },
       longTasks: lhr.audits['long-tasks'],
     };
