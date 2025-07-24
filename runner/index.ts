@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { join } from "node:path";
 import { program } from "commander";
-import { AuditRunner } from './audit.js';
+import { AuditRunner, outputDir } from './audit.js';
 import CPUProfileAnalyzer from "./analyzer.js";
 import Formatter from "./formatter.js";
+import { existsSync } from "node:fs";
 
 program
   .command("audit")
@@ -37,9 +39,11 @@ program
   .action(async (options) => {
     try {
       const analyzer = new CPUProfileAnalyzer();
-      const report = await analyzer.analyzeCPUProfile(options.profile, options.trace);
+      const cpuReport = await analyzer.analyzeCPUProfile(options.profile, options.trace);
+      const auditReportPath = join(outputDir, 'report.json');
+      const auditReport = await analyzer.analyzeAuditReport(auditReportPath);
       const formatter = new Formatter();
-      const formattedAnalysis = await formatter.formatStructuredAnalysis(report);
+      const formattedAnalysis = formatter.formatAnalysis(cpuReport, auditReport);
       console.log(formattedAnalysis);
     } catch (error) {
       console.error('Analysis failed:', error);

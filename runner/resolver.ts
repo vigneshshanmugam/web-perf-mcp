@@ -3,6 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 
+export interface Location {
+  url: string,
+  line: number,
+  column: number,
+  originalFunctionName?: string
+}
+
 export interface ResolvedLocation {
   originalFile: string;
   originalLine: number;
@@ -17,8 +24,9 @@ export interface ResolvedLocation {
 export class SourceMapResolver {
   private sourceMapCache = new Map<string, { url: string | null, map: SourceMapConsumer | null }>();
   private fileContentsCache = new Map<string, string>();
+  private locationsMap = new Map<string, ResolvedLocation>();
 
-  async resolveLocation(url: string, line: number, column: number, originalFunctionName?: string): Promise<ResolvedLocation> {
+  async resolveLocation(url: string, line: number = 1, column: number = 1, originalFunctionName?: string): Promise<ResolvedLocation> {
     const defaultResult: ResolvedLocation = {
       originalFile: url,
       originalLine: line,
@@ -42,7 +50,6 @@ export class SourceMapResolver {
       const originalPosition = sourceMap.originalPositionFor({ line, column });
 
       if (originalPosition.source) {
-        // Try to get a better function name if the original name is null
         let functionName = originalPosition.name || originalFunctionName;
         return {
           originalFile: this.cleanSourcePath(originalPosition.source),
@@ -58,14 +65,33 @@ export class SourceMapResolver {
 
       return defaultResult;
     } catch (error) {
-      console.warn(`Failed to resolve source map for ${url}:`, error.message);
+      console.warn(`Failed to resolve source map for ${url}:`, error);
       return defaultResult;
     }
   }
 
-  async resolveLocations(locations: Array<{ url: string, line: number, column: number, originalFunctionName?: string }>): Promise<ResolvedLocation[]> {
+  async resolveLocations(locations: Location[]): Promise<ResolvedLocation[]> {
     return Promise.all(
-      locations.map(loc => this.resolveLocation(loc.url, loc.line, loc.column, loc.originalFunctionName))
+      locations.map(async loc => {
+        try {
+          if ((!loc.line || !loc.column) && this.locationsMap.has(loc.url)) {
+            return this.locationsMap.get(loc.url);
+          }
+          const resolvedLocation = await this.resolveLocation(loc.url, loc.line, loc.column, loc.originalFunctionName);
+          this.locationsMap.set(loc.url, resolvedLocation);
+          return resolvedLocation;
+        } catch (e) {
+          console.error(`Failed to resolve location for ${loc.url}:`, e);
+          return {
+            originalFile: loc.url,
+            originalLine: loc.line,
+            originalColumn: loc.column,
+            originalName: null,
+            isResolved: false,
+            minifiedUrl: loc.url
+          };
+        }
+      })
     );
   }
 
@@ -116,7 +142,6 @@ export class SourceMapResolver {
       const parsedMap = JSON.parse(sourceMapData);
       const consumer = await new SourceMapConsumer(parsedMap);
       this.sourceMapCache.set(source, { url: sourceMapUrl, map: consumer });
-
       return {
         url: sourceMapUrl,
         map: parsedMap
@@ -243,39 +268,5 @@ export class SourceMapResolver {
       return `${parts[0]}/.../${parts.slice(-3).join('/')}`;
     }
     return sourcePath;
-  }
-
-  private findNearbyFunctionName(sourceMap: any, line: number, column: number): string | null {
-    // Try positions around the original line/column to find a function name
-    const searchRadius = 5; // Search within 5 lines/columns
-
-    // First, try positions before the current position (function declarations usually come before)
-    for (let lineOffset = 0; lineOffset <= searchRadius; lineOffset++) {
-      for (let colOffset = 0; colOffset <= searchRadius; colOffset++) {
-        // Try positions before current position
-        const testLine = line - lineOffset;
-        const testCol = column - colOffset;
-
-        if (testLine > 0 && testCol >= 0) {
-          const pos = sourceMap.originalPositionFor({ line: testLine, column: testCol });
-          if (pos.name && pos.source) {
-            return pos.name;
-          }
-        }
-
-        // Also try positions after current position (but with lower priority)
-        if (lineOffset > 0 || colOffset > 0) {
-          const testLineAfter = line + lineOffset;
-          const testColAfter = column + colOffset;
-
-          const posAfter = sourceMap.originalPositionFor({ line: testLineAfter, column: testColAfter });
-          if (posAfter.name && posAfter.source) {
-            return posAfter.name;
-          }
-        }
-      }
-    }
-
-    return null;
   }
 }

@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { writeFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import type { CPUProfile, CPUProfileNode, AggregatedFunction, CPUProfileAnalysis } from './types';
+import { existsSync } from 'node:fs';
+import type { CPUProfile, CPUProfileNode, AggregatedFunction, CPUProfileAnalysis, PerformanceMetrics } from './types';
 import { SourceMapResolver } from './resolver.js';
 
 class CPUProfileAnalyzer {
@@ -29,13 +28,43 @@ class CPUProfileAnalyzer {
       await this.analyzeCPUProfileData(cpuProfile);
 
       const flamegraphData = await this.generateFlamegraphData();
-      const report = this.generateLLMReport(flamegraphData);
-      this.saveReport(report, join(dirname(cpuProfilePath), `complete-analysis.json`));
+      const report = this.generate(flamegraphData);
       return report;
     } catch (error) {
       console.error('Error analyzing CPU profile:', error);
       throw error;
     }
+  }
+
+  async loadAuditReport(reportPath: string): Promise<PerformanceMetrics> {
+    if (!existsSync(reportPath)) {
+      throw new Error('Audit report not found');
+    }
+    return JSON.parse(await readFile(reportPath, 'utf-8'));
+  }
+
+  async analyzeAuditReport(reportPath: string) {
+    const report = await this.loadAuditReport(reportPath);
+    // loop through the audit report and try to map the long task functions to original source code 
+    if (report.longTasks && report.longTasks.details && (report.longTasks.details as any).items) {
+      const longTaskItems = (report.longTasks.details as any).items;
+
+      if (longTaskItems.length > 0) {
+        const resolvedLocations = await this.sourceMapResolver.resolveLocations(
+          longTaskItems.map(item => ({
+            url: item.url,
+          }))
+        );
+        resolvedLocations.forEach((location, index) => {
+          if (location.isResolved) {
+            longTaskItems[index].url = location.originalFile;
+            longTaskItems[index].line = location.originalLine;
+            longTaskItems[index].column = location.originalColumn;
+          }
+        });
+      }
+    }
+    return report;
   }
 
   async analyzeCPUProfileData(cpuProfile: CPUProfile) {
@@ -154,7 +183,9 @@ class CPUProfileAnalyzer {
       });
 
       const resolvedCount = resolvedLocations.filter(r => r.isResolved).length;
-      console.log(`✅ Resolved source maps for ${resolvedCount}/${resolvedLocations.length} functions`);
+      if (resolvedCount > 0) {
+        console.info(`✅ Resolved source maps for ${resolvedCount}/${resolvedLocations.length} functions`);
+      }
     } catch (error) {
       console.warn(`Failed to resolve source maps: ${error.message}`);
     }
@@ -448,7 +479,7 @@ class CPUProfileAnalyzer {
     }
   }
 
-  generateLLMReport(flamegraphData?: any): CPUProfileAnalysis {
+  generate(flamegraphData?: any): CPUProfileAnalysis {
     const { rawData, topFunctions } = this.analysisResults;
     return {
       executive_summary: {
@@ -476,17 +507,6 @@ class CPUProfileAnalyzer {
       })),
       flamegraph_analysis: flamegraphData,
     };
-  }
-
-  saveReport(report: CPUProfileAnalysis, outputPath: string) {
-    const formattedReport = {
-      ...report,
-      generated_at: new Date().toISOString(),
-    };
-
-    writeFileSync(outputPath, JSON.stringify(formattedReport, null, 2));
-    console.log(`LLM-friendly performance report saved to: ${outputPath}`);
-    return formattedReport;
   }
 }
 

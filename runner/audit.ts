@@ -4,6 +4,10 @@ import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { TestConfig, PerformanceMetrics, MetricRating } from './types.js';
 
+// Output directory for audit results
+export const outputDir = join(process.cwd(), 'results');
+
+// To be able to profile Kibana page, we need to login first
 async function handleKibanaLogin(page: Page, url: string) {
   await page.setRequestInterception(true);
   page.on('request', async (request) => {
@@ -25,8 +29,6 @@ async function handleKibanaLogin(page: Page, url: string) {
 export class AuditRunner {
   options: TestConfig;
   deviceConfigs: Record<string, { viewport: { width: number; height: number } }>;
-  private outputDir = join(process.cwd(), 'results');
-
   constructor(options = {}) {
     this.options = {
       url: "",
@@ -46,14 +48,13 @@ export class AuditRunner {
     };
   }
 
-  async runAudit(url: string): Promise<string> {
-    await mkdir(this.outputDir, { recursive: true });
-    console.log(`Starting performance audit for: ${url}`);
+  async runAudit(url: string): Promise<PerformanceMetrics> {
+    await mkdir(outputDir, { recursive: true });
+    console.info(`Starting performance audit for: ${url}`);
     try {
       const result = await this.runSingleTest(url);
-      const markdown = this.generateMarkdown(result);
-      await this.saveResults(markdown);
-      return markdown;
+      await this.saveResults(result);
+      return result;
     } catch (error) {
       console.error(`Audit failed:`, error);
       throw error;
@@ -93,9 +94,9 @@ export class AuditRunner {
       if (session && this.options.profile) {
         try {
           const { profile } = await session.send('Profiler.stop');
-          const profilePath = join(this.outputDir, `cpu-profile.json`);
+          const profilePath = join(outputDir, `cpu-profile.json`);
           await writeFile(profilePath, JSON.stringify(profile, null, 2));
-          console.log(`✅ CPU profile saved to ${profilePath}`);
+          console.info(`✅ CPU profile saved to ${profilePath}`);
         } catch (error) {
           console.warn('Failed to save CPU profile:', error.message);
         }
@@ -126,16 +127,16 @@ export class AuditRunner {
       };
 
       const flow = await startFlow(page, { config: lhConfig });
-      await flow.navigate(url, { logLevel: 'verbose' });
+      await flow.navigate(url, { logLevel: 'error' });
       const lighthouseResult = await flow.createFlowResult();
       const flowArtifacts = await flow.createArtifactsJson();
       const traceEvents = flowArtifacts.gatherSteps[0].artifacts?.Trace?.traceEvents;
 
       // Save trace events
       if (traceEvents) {
-        const tracePath = join(this.outputDir, `trace-events.json`);
+        const tracePath = join(outputDir, `trace-events.json`);
         await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
-        console.log(`✅ Trace events saved to ${tracePath}`);
+        console.info(`✅ Trace events saved to ${tracePath}`);
       }
 
       return this.combineResults(lighthouseResult?.steps[0], url);
@@ -188,102 +189,13 @@ export class AuditRunner {
     };
   }
 
-  generateMarkdown(result: PerformanceMetrics): string {
-    let markdown = `# Performance Audit Report\n\n`;
-    markdown += `**URL**: ${result.url}\n`;
-    markdown += `**Audit Date**: ${new Date(result.timestamp).toLocaleString()}\n`;
-    markdown += `**Performance Score**: ${result.performanceScore}/100\n\n`;
-
-    // Core Web Vitals Analysis
-    markdown += `## Core Web Vitals Analysis\n\n`;
-    markdown += `| Metric | Value | Rating | Percentile | Status |\n`;
-    markdown += `|--------|-------|--------|------------|--------|\n`;
-
-    const getStatusEmoji = (rating: string) => {
-      switch (rating) {
-        case 'good': return '✅';
-        case 'needs-improvement': return '⚠️';
-        case 'poor': return '❌';
-        default: return '❓';
-      }
-    };
-
-    const vitals = [
-      { name: 'First Contentful Paint (FCP)', key: 'fcp', unit: 'ms' },
-      { name: 'Largest Contentful Paint (LCP)', key: 'lcp', unit: 'ms' },
-      { name: 'Cumulative Layout Shift (CLS)', key: 'cls', unit: '' },
-      { name: 'Time to First Byte (TTFB)', key: 'ttfb', unit: 'ms' }
-    ];
-
-    vitals.forEach(vital => {
-      const metric = result.coreWebVitals[vital.key];
-      if (metric) {
-        const status = getStatusEmoji(metric.rating);
-        markdown += `| ${vital.name} | ${metric.value}${vital.unit} | ${metric.rating} | ${metric.percentile}% | ${status} |\n`;
-      }
-    });
-
-    markdown += `\n`;
-
-    const issues = [];
-    vitals.forEach(vital => {
-      const metric = result.coreWebVitals[vital.key];
-      if (metric && metric.rating !== 'good') {
-        issues.push(`**${vital.name}**: ${metric.value}${vital.unit} (${metric.rating})`);
-      }
-    });
-
-    if (issues.length > 0) {
-      markdown += `## 🚨 Performance Issues Detected\n\n`;
-      issues.forEach(issue => markdown += `- ${issue}\n`);
-      markdown += `\n`;
-    }
-
-    if (result.longTasks && result.longTasks.details && (result.longTasks.details as any).items) {
-      const longTaskItems = (result.longTasks.details as any).items;
-
-      if (longTaskItems.length > 0) {
-        markdown += `## 🐌 Long Tasks Analysis\n\n`;
-        markdown += `⚠️ **${longTaskItems.length} long task(s) detected** - These block the main thread and hurt user experience.\n\n`;
-
-        // Summary statistics
-        const totalDuration = longTaskItems.reduce((sum: number, task: any) => sum + task.duration, 0);
-        const avgDuration = totalDuration / longTaskItems.length;
-        const maxDuration = Math.max(...longTaskItems.map((task: any) => task.duration));
-
-        markdown += `### Summary\n`;
-        markdown += `- **Total blocking time**: ${totalDuration.toFixed(1)}ms\n`;
-        markdown += `- **Average task duration**: ${avgDuration.toFixed(1)}ms\n`;
-        markdown += `- **Longest task**: ${maxDuration.toFixed(1)}ms\n\n`;
-
-        // Task details table
-        markdown += `### Task Details\n\n`;
-        markdown += `| URL | Start Time | Duration | Impact |\n`;
-        markdown += `|-----|------------|----------|--------|\n`;
-
-        longTaskItems
-          .sort((a: any, b: any) => b.duration - a.duration)
-          .forEach((task: any) => {
-            const impact = task.duration > 100 ? '🔴 Critical' : task.duration > 50 ? '🟡 High' : '🟢 Medium';
-            const url = task.url ?? 'Unknown';
-            markdown += `| ${url} | ${task.startTime.toFixed(1)}ms | ${task.duration.toFixed(1)}ms | ${impact} |\n`;
-          });
-      } else {
-        markdown += `## ✅ Long Tasks Analysis\n\n`;
-        markdown += `**No long tasks detected** - Main thread blocking is minimal.\n\n`;
-      }
-    }
-    return markdown;
-  }
-
-  private async saveResults(markdown: string): Promise<void> {
+  private async saveResults(result: PerformanceMetrics): Promise<void> {
     try {
-      await mkdir(this.outputDir, { recursive: true });
-      const markdownPath = join(this.outputDir, 'report.md');
-      await writeFile(markdownPath, markdown, 'utf-8');
-      console.log(`✅ Markdown report saved to ${markdownPath}`);
+      await mkdir(outputDir, { recursive: true });
+      await writeFile(join(outputDir, 'report.json'), JSON.stringify(result, null, 2), 'utf-8');
+      console.info(`✅ Audit report saved to ${join(outputDir, 'report.json')}`);
     } catch (error) {
-      console.error('Error saving results:', error);
+      console.error('Error saving audit results:', error);
     }
   }
 }

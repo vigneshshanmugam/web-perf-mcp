@@ -1,6 +1,13 @@
 # perf-audit-tool
 
-Performance auditing tool with Lighthouse, Playwright, and LLM analysis
+MCP Server that audits the web page for finding the bottlenecks and CPU profiling using Lighthouse and Puppeteer.
+
+### Features
+
+- CPU profiling
+- Source mapping
+- Flamegraph generation
+- Provide recommendations to optimize the code
 
 ## How
 

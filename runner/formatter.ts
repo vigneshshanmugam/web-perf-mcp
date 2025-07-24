@@ -1,11 +1,8 @@
-import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { CPUProfileAnalysis } from "./types";
+import { CPUProfileAnalysis, PerformanceMetrics } from "./types";
 
 
 export default class Formatter {
-  async formatStructuredAnalysis(report: CPUProfileAnalysis): Promise<string> {
+  formatAnalysis(report: CPUProfileAnalysis, auditReport: PerformanceMetrics): string {
     let output = `# COMPREHENSIVE PERFORMANCE ANALYSIS\n\n`;
 
     output += `## 🎯 EXECUTIVE SUMMARY\n`;
@@ -14,7 +11,7 @@ export default class Formatter {
     output += `- **Sample Interval**: ${report.executive_summary.sample_interval_ms}ms\n`;
     output += `\n`;
 
-    const markdownReport = await this.loadMarkdownReport();
+    const markdownReport = this.formatAuditReport(auditReport);
     if (markdownReport) {
       output += `## 📊 WEB VITALS & LONG TASKS CORRELATION\n`;
       output += markdownReport;
@@ -30,19 +27,16 @@ export default class Formatter {
       output += `|----------|----------------|---------------|----------|-------|-------|---------------|\n`;
 
       report.high_impact_functions.slice(0, 10).forEach((func) => {
-        // Use fullOriginalPath if available, otherwise fall back to originalFile
         const originalSource = func.isSourceMapped
           ? (func.fullOriginalPath || (func.originalFile ? `${func.originalFile}:${func.originalLine}:${func.originalColumn}` : 'N/A'))
           : 'N/A';
 
-        // Extract just the filename from the full path for cleaner display
         const displaySource = func.isSourceMapped && func.fullOriginalPath
           ? `${func.fullOriginalPath.split('/').pop()}:${func.originalLine}:${func.originalColumn}`
           : originalSource;
 
         const sourceMapped = func.isSourceMapped ? '✅' : '❌';
-        const minifiedFile = func.file.split('/').pop() || func.file; // Show just filename for minified
-
+        const minifiedFile = func.file.split('/').pop() || func.file;
         output += `| ${func.function} | ${displaySource} | ${minifiedFile} | ${func.execution_time_ms}ms | ${func.cpu_percentage}% | ${func.call_count} | ${sourceMapped} |\n`;
       });
       output += `\n`;
@@ -55,28 +49,13 @@ export default class Formatter {
       output += `## 🔥 FLAMEGRAPH ANALYSIS\n\n`;
       output += this.formatFlamegraphAnalysis(report.flamegraph_analysis, report.high_impact_functions);
     }
-
     return output;
-  }
-
-  private async loadMarkdownReport(): Promise<string | null> {
-    try {
-      const reportPath = join(process.cwd(), 'results', 'report.md');
-      if (existsSync(reportPath)) {
-        return await readFile(reportPath, 'utf-8');
-      }
-    } catch (error) {
-      console.warn('Could not load markdown report:', error.message);
-    }
-    return null;
   }
 
   private formatFlamegraphAnalysis(flamegraph: any, highImpactFunctions: any[]): string {
     let output = '';
 
-    // Helper function to resolve function names using source map data
     const resolveFunctionName = (originalName: string, location?: string) => {
-      // Try to find a matching function in high impact functions
       const matchedFunc = highImpactFunctions.find(func =>
         func.function === originalName ||
         (location && func.location === location)
@@ -90,7 +69,6 @@ export default class Formatter {
       return originalName;
     };
 
-    // Execution Pattern Analysis
     if (flamegraph.visualSummary?.executionPattern) {
       output += `### 📊 Execution Pattern\n\n`;
       output += `**Pattern**: ${flamegraph.visualSummary.executionPattern.pattern}\n`;
@@ -163,5 +141,94 @@ export default class Formatter {
     output += `Look at all the data provided above to identify optimization opportunities that contains web performance metrics, CPU profile analysis, and script execution analysis.\n`;
     output += `Suggest performance optimization techniques and provide alternate code to handle the hot functions.\n\n`;
     return output;
+  }
+
+  private formatAuditReport(result: PerformanceMetrics): string {
+    let markdown = `# Performance Audit Report\n\n`;
+    markdown += `**URL**: ${result.url}\n`;
+    markdown += `**Audit Date**: ${new Date(result.timestamp).toLocaleString()}\n`;
+    markdown += `**Performance Score**: ${result.performanceScore}/100\n\n`;
+
+    markdown += `## Core Web Vitals Analysis\n\n`;
+    markdown += `| Metric | Value | Rating | Percentile | Status |\n`;
+    markdown += `|--------|-------|--------|------------|--------|\n`;
+
+    const getStatusEmoji = (rating: string) => {
+      switch (rating) {
+        case 'good': return '✅';
+        case 'needs-improvement': return '⚠️';
+        case 'poor': return '❌';
+        default: return '❓';
+      }
+    };
+
+    const vitals = [
+      { name: 'First Contentful Paint (FCP)', key: 'fcp', unit: 'ms' },
+      { name: 'Largest Contentful Paint (LCP)', key: 'lcp', unit: 'ms' },
+      { name: 'Cumulative Layout Shift (CLS)', key: 'cls', unit: '' },
+      { name: 'Time to First Byte (TTFB)', key: 'ttfb', unit: 'ms' }
+    ];
+
+    vitals.forEach(vital => {
+      const metric = result.coreWebVitals[vital.key];
+      if (metric) {
+        const status = getStatusEmoji(metric.rating);
+        markdown += `| ${vital.name} | ${metric.value}${vital.unit} | ${metric.rating} | ${metric.percentile}% | ${status} |\n`;
+      }
+    });
+
+    markdown += `\n`;
+
+    const issues = [];
+    vitals.forEach(vital => {
+      const metric = result.coreWebVitals[vital.key];
+      if (metric && metric.rating !== 'good') {
+        issues.push(`**${vital.name}**: ${metric.value}${vital.unit} (${metric.rating})`);
+      }
+    });
+
+    if (issues.length > 0) {
+      markdown += `## 🚨 Performance Issues Detected\n\n`;
+      issues.forEach(issue => markdown += `- ${issue}\n`);
+      markdown += `\n`;
+    }
+
+    if (result.longTasks && result.longTasks.details && (result.longTasks.details as any).items) {
+      const longTaskItems = (result.longTasks.details as any).items;
+
+      if (longTaskItems.length > 0) {
+        markdown += `## 🐌 Long Tasks Analysis\n\n`;
+        markdown += `⚠️ **${longTaskItems.length} long task(s) detected** - These block the main thread and hurt user experience.\n\n`;
+
+        const totalDuration = longTaskItems.reduce((sum: number, task: any) => sum + task.duration, 0);
+        const avgDuration = totalDuration / longTaskItems.length;
+        const maxDuration = Math.max(...longTaskItems.map((task: any) => task.duration));
+
+        markdown += `### Summary\n`;
+        markdown += `- **Total blocking time**: ${totalDuration.toFixed(1)}ms\n`;
+        markdown += `- **Average task duration**: ${avgDuration.toFixed(1)}ms\n`;
+        markdown += `- **Longest task**: ${maxDuration.toFixed(1)}ms\n\n`;
+
+        markdown += `### Task Details\n\n`;
+        markdown += `| URL | Duration | Impact |\n`;
+        markdown += `|-----|----------|--------|\n`;
+
+        longTaskItems
+          .sort((a: any, b: any) => b.duration - a.duration)
+          .forEach((task: any) => {
+            // construct line/col from url if available
+            let url = task.url;
+            if (task.line && task.column) {
+              url += `:${task.line}:${task.column}`;
+            }
+            const impact = task.duration > 100 ? '🔴 Critical' : task.duration > 50 ? '🟡 High' : '🟢 Medium';
+            markdown += `| ${url} | ${task.duration.toFixed(1)}ms | ${impact} |\n`;
+          });
+      } else {
+        markdown += `## ✅ Long Tasks Analysis\n\n`;
+        markdown += `**No long tasks detected**.\n\n`;
+      }
+    }
+    return markdown;
   }
 }

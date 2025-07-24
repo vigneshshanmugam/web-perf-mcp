@@ -1,7 +1,7 @@
 export const TOOL_DEFINITIONS = [
   {
-    name: 'run_performance_audit',
-    description: 'Run a comprehensive performance audit on a web page using Lighthouse and Playwright',
+    name: 'run_audit',
+    description: 'Run a performance audit with CPU profiling on a web page using Lighthouse and Puppeteer',
     inputSchema: {
       type: 'object',
       properties: {
@@ -22,8 +22,8 @@ export const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: 'analyze_performance_data',
-    description: 'Analyze CPU profile and/or trace events data to generate comprehensive performance insights and recommendations',
+    name: 'analyze_data',
+    description: 'Analyze CPU profile and/or trace events data to generate performance insights and recommendations',
     inputSchema: {
       type: 'object',
       properties: {
