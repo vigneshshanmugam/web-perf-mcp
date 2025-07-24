@@ -32,12 +32,12 @@ export default class Formatter {
       report.high_impact_functions.slice(0, 10).forEach((func) => {
         // Use fullOriginalPath if available, otherwise fall back to originalFile
         const originalSource = func.isSourceMapped
-          ? (func.fullOriginalPath || (func.originalFile ? `${func.originalFile}:${func.originalLine}` : 'N/A'))
+          ? (func.fullOriginalPath || (func.originalFile ? `${func.originalFile}:${func.originalLine}:${func.originalColumn}` : 'N/A'))
           : 'N/A';
 
         // Extract just the filename from the full path for cleaner display
         const displaySource = func.isSourceMapped && func.fullOriginalPath
-          ? `${func.fullOriginalPath.split('/').pop()}:${func.originalLine}`
+          ? `${func.fullOriginalPath.split('/').pop()}:${func.originalLine}:${func.originalColumn}`
           : originalSource;
 
         const sourceMapped = func.isSourceMapped ? '✅' : '❌';
@@ -84,7 +84,7 @@ export default class Formatter {
 
       if (matchedFunc && matchedFunc.isSourceMapped && matchedFunc.fullOriginalPath) {
         const filename = matchedFunc.fullOriginalPath.split('/').pop();
-        return `${matchedFunc.function} (${filename}:${matchedFunc.originalLine})`;
+        return `${matchedFunc.function} (${filename}:${matchedFunc.originalLine}:${matchedFunc.originalColumn})`;
       }
 
       return originalName;

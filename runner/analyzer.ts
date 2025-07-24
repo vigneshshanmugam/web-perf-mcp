@@ -131,7 +131,8 @@ class CPUProfileAnalyzer {
         functionsWithNodes.map(item => ({
           url: item.func.url,
           line: item.func.lineNumber,
-          column: item.func.columnNumber
+          column: item.func.columnNumber,
+          originalFunctionName: item.func.functionName // Pass original function name for context
         }))
       );
       // Update top functions with resolved locations and enhanced information
@@ -143,7 +144,7 @@ class CPUProfileAnalyzer {
             originalFile: resolved.originalFile,
             originalLine: resolved.originalLine,
             originalColumn: resolved.originalColumn,
-            originalName: resolved.originalName,
+            originalName: resolved.originalName || func.functionName,
             isSourceMapped: true,
             fullOriginalPath: resolved.fullOriginalPath,
             sourceMapUrl: resolved.sourceMapUrl

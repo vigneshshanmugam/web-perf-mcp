@@ -18,7 +18,7 @@ export class SourceMapResolver {
   private sourceMapCache = new Map<string, { url: string | null, map: SourceMapConsumer | null }>();
   private fileContentsCache = new Map<string, string>();
 
-  async resolveLocation(url: string, line: number, column: number): Promise<ResolvedLocation> {
+  async resolveLocation(url: string, line: number, column: number, originalFunctionName?: string): Promise<ResolvedLocation> {
     const defaultResult: ResolvedLocation = {
       originalFile: url,
       originalLine: line,
@@ -42,11 +42,13 @@ export class SourceMapResolver {
       const originalPosition = sourceMap.originalPositionFor({ line, column });
 
       if (originalPosition.source) {
+        // Try to get a better function name if the original name is null
+        let functionName = originalPosition.name || originalFunctionName;
         return {
           originalFile: this.cleanSourcePath(originalPosition.source),
           originalLine: originalPosition.line || line,
           originalColumn: originalPosition.column || column,
-          originalName: originalPosition.name,
+          originalName: functionName,
           isResolved: true,
           minifiedUrl: url,
           fullOriginalPath: originalPosition.source,
@@ -61,9 +63,9 @@ export class SourceMapResolver {
     }
   }
 
-  async resolveLocations(locations: Array<{ url: string, line: number, column: number }>): Promise<ResolvedLocation[]> {
+  async resolveLocations(locations: Array<{ url: string, line: number, column: number, originalFunctionName?: string }>): Promise<ResolvedLocation[]> {
     return Promise.all(
-      locations.map(loc => this.resolveLocation(loc.url, loc.line, loc.column))
+      locations.map(loc => this.resolveLocation(loc.url, loc.line, loc.column, loc.originalFunctionName))
     );
   }
 
@@ -127,22 +129,27 @@ export class SourceMapResolver {
   }
 
   private async retrieveSourceMapURL(source: string): Promise<string | null> {
-    const content = await this.retrieveFile(source);
-    if (!content) return null;
+    const result = await this.retrieveFileWithHeaders(source);
+    if (!result.content) return null;
 
-    // Look for sourceMappingURL comment (find the last one)
+    // Check for HTTP headers first (SourceMap or X-SourceMap)
+    if (result.sourceMapUrl) {
+      return result.sourceMapUrl;
+    }
+
+    // Fallback to sourceMappingURL comment (find the last one)
     const re = /(?:\/\/[@#]\s*sourceMappingURL=([^\s'"]+)\s*$)|(?:\/\*[@#]\s*sourceMappingURL=([^\s*'"]+)\s*(?:\*\/)\s*$)/gm;
     let lastMatch: RegExpExecArray | null = null;
     let match: RegExpExecArray | null;
 
-    while ((match = re.exec(content))) {
+    while ((match = re.exec(result.content))) {
       lastMatch = match;
     }
 
     return lastMatch ? (lastMatch[1] || lastMatch[2]) : null;
   }
 
-  private async retrieveFile(filePath: string): Promise<string | null> {
+  private async retrieveFileWithHeaders(filePath: string): Promise<{ content: string | null, sourceMapUrl: string | null }> {
     filePath = filePath.trim();
 
     if (filePath.startsWith('file://')) {
@@ -150,21 +157,33 @@ export class SourceMapResolver {
     }
 
     if (this.fileContentsCache.has(filePath)) {
-      return this.fileContentsCache.get(filePath)!;
+      return { content: this.fileContentsCache.get(filePath)!, sourceMapUrl: null };
     }
 
     let content: string | null = null;
-
+    let sourceMapUrl: string | null = null;
     try {
       if (filePath.startsWith('http')) {
         const response = await fetch(filePath);
-        content = response.ok ? await response.text() : null;
+        if (response.ok) {
+          content = await response.text();
+          // Support providing a sourceMappingURL via the SourceMap header
+          sourceMapUrl = response.headers.get('SourceMap') ||
+            response.headers.get('X-SourceMap') ||
+            null;
+        }
       } else if (existsSync(filePath)) {
         content = await readFile(filePath, 'utf-8');
       }
     } catch (error) { }
+
     this.fileContentsCache.set(filePath, content);
-    return content;
+    return { content, sourceMapUrl };
+  }
+
+  private async retrieveFile(filePath: string): Promise<string | null> {
+    const result = await this.retrieveFileWithHeaders(filePath);
+    return result.content;
   }
 
   private resolveUrl(base: string, relative: string): string {
@@ -224,5 +243,39 @@ export class SourceMapResolver {
       return `${parts[0]}/.../${parts.slice(-3).join('/')}`;
     }
     return sourcePath;
+  }
+
+  private findNearbyFunctionName(sourceMap: any, line: number, column: number): string | null {
+    // Try positions around the original line/column to find a function name
+    const searchRadius = 5; // Search within 5 lines/columns
+
+    // First, try positions before the current position (function declarations usually come before)
+    for (let lineOffset = 0; lineOffset <= searchRadius; lineOffset++) {
+      for (let colOffset = 0; colOffset <= searchRadius; colOffset++) {
+        // Try positions before current position
+        const testLine = line - lineOffset;
+        const testCol = column - colOffset;
+
+        if (testLine > 0 && testCol >= 0) {
+          const pos = sourceMap.originalPositionFor({ line: testLine, column: testCol });
+          if (pos.name && pos.source) {
+            return pos.name;
+          }
+        }
+
+        // Also try positions after current position (but with lower priority)
+        if (lineOffset > 0 || colOffset > 0) {
+          const testLineAfter = line + lineOffset;
+          const testColAfter = column + colOffset;
+
+          const posAfter = sourceMap.originalPositionFor({ line: testLineAfter, column: testColAfter });
+          if (posAfter.name && posAfter.source) {
+            return posAfter.name;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 }
