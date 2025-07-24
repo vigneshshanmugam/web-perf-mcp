@@ -47,6 +47,7 @@ export class AuditRunner {
   }
 
   async runAudit(url: string): Promise<string> {
+    await mkdir(this.outputDir, { recursive: true });
     console.log(`Starting performance audit for: ${url}`);
     try {
       const result = await this.runSingleTest(url);
@@ -88,6 +89,18 @@ export class AuditRunner {
       }
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
+      // Stop profiling and save CPU profile
+      if (session && this.options.profile) {
+        try {
+          const { profile } = await session.send('Profiler.stop');
+          const profilePath = join(this.outputDir, `cpu-profile.json`);
+          await writeFile(profilePath, JSON.stringify(profile, null, 2));
+          console.log(`✅ CPU profile saved to ${profilePath}`);
+        } catch (error) {
+          console.warn('Failed to save CPU profile:', error.message);
+        }
+      }
+
       const lhConfig: Config = {
         extends: "lighthouse:default",
         settings: {
@@ -113,29 +126,16 @@ export class AuditRunner {
       };
 
       const flow = await startFlow(page, { config: lhConfig });
-      await flow.navigate(url, { logLevel: 'error' });
+      await flow.navigate(url, { logLevel: 'verbose' });
       const lighthouseResult = await flow.createFlowResult();
       const flowArtifacts = await flow.createArtifactsJson();
       const traceEvents = flowArtifacts.gatherSteps[0].artifacts?.Trace?.traceEvents;
 
-      await mkdir(this.outputDir, { recursive: true });
-      // Save trace events and CPU profile
+      // Save trace events
       if (traceEvents) {
         const tracePath = join(this.outputDir, `trace-events.json`);
         await writeFile(tracePath, JSON.stringify(traceEvents, null, 2));
         console.log(`✅ Trace events saved to ${tracePath}`);
-      }
-
-      // Stop profiling and save CPU profile
-      if (session && this.options.profile) {
-        try {
-          const { profile } = await session.send('Profiler.stop');
-          const profilePath = join(this.outputDir, `cpu-profile.json`);
-          await writeFile(profilePath, JSON.stringify(profile, null, 2));
-          console.log(`✅ CPU profile saved to ${profilePath}`);
-        } catch (error) {
-          console.warn('Failed to save CPU profile:', error.message);
-        }
       }
 
       return this.combineResults(lighthouseResult?.steps[0], url);

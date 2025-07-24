@@ -1,6 +1,7 @@
 import { SourceMapConsumer } from 'source-map';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import * as path from 'node:path';
 
 export interface ResolvedLocation {
   originalFile: string;
@@ -9,11 +10,13 @@ export interface ResolvedLocation {
   originalName: string | null;
   isResolved: boolean;
   minifiedUrl: string;
+  fullOriginalPath?: string;
+  sourceMapUrl?: string;
 }
 
 export class SourceMapResolver {
-  private sourceMapCache = new Map<string, SourceMapConsumer>();
-  private fetchCache = new Map<string, string>();
+  private sourceMapCache = new Map<string, { url: string | null, map: SourceMapConsumer | null }>();
+  private fileContentsCache = new Map<string, string>();
 
   async resolveLocation(url: string, line: number, column: number): Promise<ResolvedLocation> {
     const defaultResult: ResolvedLocation = {
@@ -30,30 +33,24 @@ export class SourceMapResolver {
         return defaultResult;
       }
 
-      const sourceMapUrl = await this.findSourceMapUrl(url);
-      if (!sourceMapUrl) {
+      const sourceMapData = await this.retrieveSourceMap(url);
+      if (!sourceMapData) {
         return defaultResult;
       }
 
-      const sourceMap = await this.getSourceMap(sourceMapUrl);
-      if (!sourceMap) {
-        return defaultResult;
-      }
-
-      const originalPosition = sourceMap.originalPositionFor({
-        line: line,
-        column: column
-      });
+      const sourceMap = await new SourceMapConsumer(sourceMapData.map);
+      const originalPosition = sourceMap.originalPositionFor({ line, column });
 
       if (originalPosition.source) {
-        const cleanedPath = this.cleanSourcePath(originalPosition.source);
         return {
-          originalFile: cleanedPath,
+          originalFile: this.cleanSourcePath(originalPosition.source),
           originalLine: originalPosition.line || line,
           originalColumn: originalPosition.column || column,
           originalName: originalPosition.name,
           isResolved: true,
-          minifiedUrl: url
+          minifiedUrl: url,
+          fullOriginalPath: originalPosition.source,
+          sourceMapUrl: sourceMapData.url
         };
       }
 
@@ -65,232 +62,167 @@ export class SourceMapResolver {
   }
 
   async resolveLocations(locations: Array<{ url: string, line: number, column: number }>): Promise<ResolvedLocation[]> {
-    const promises = locations.map(loc => this.resolveLocation(loc.url, loc.line, loc.column));
-    return Promise.all(promises);
+    return Promise.all(
+      locations.map(loc => this.resolveLocation(loc.url, loc.line, loc.column))
+    );
   }
 
-  private async findSourceMapUrl(jsUrl: string): Promise<string | null> {
-    try {
-      // For bundled files, try common bundle source map patterns first
-      const fileName = jsUrl.split('/').pop() || '';
-      const baseName = fileName.replace(/\.js$/, '');
-      const baseUrl = jsUrl.substring(0, jsUrl.lastIndexOf('/') + 1);
-
-      // Try common source map patterns (prioritize bundle patterns)
-      const possibleSourceMaps = [
-        `${jsUrl}.map`,
-        jsUrl.replace(/\.js$/, '.js.map'),
-        jsUrl.replace(/\.js$/, '.map'),
-        // Bundle-specific patterns
-        `${baseUrl}${baseName}.bundle.js.map`,
-        `${baseUrl}${baseName}.min.js.map`,
-        `${baseUrl}sourcemaps/${fileName}.map`,
-        `${baseUrl}maps/${fileName}.map`
-      ];
-
-      // Check if source map exists by trying to fetch it
-      for (const mapUrl of possibleSourceMaps) {
-        if (await this.urlExists(mapUrl)) {
-
-          return mapUrl;
-        }
+  private async retrieveSourceMap(source: string): Promise<{ url: string, map: any } | null> {
+    // Check cache first
+    if (this.sourceMapCache.has(source)) {
+      const cached = this.sourceMapCache.get(source)!;
+      if (cached.map) {
+        return { url: cached.url!, map: cached.map };
       }
+    }
 
-      // Try to read sourceMappingURL from the JS file
-      const jsContent = await this.fetchContent(jsUrl);
-      if (jsContent) {
-        // Find ALL sourceMappingURL comments (bundled files often have multiple)
-        const sourceMapMatches = jsContent.match(/\/\/# sourceMappingURL=(.+?)(?:\s|$)/g);
-        if (sourceMapMatches && sourceMapMatches.length > 0) {
-          // Use the last sourceMappingURL comment (most likely the bundle's main source map)
-          const lastMatch = sourceMapMatches[sourceMapMatches.length - 1];
-          const mapPathMatch = lastMatch.match(/\/\/# sourceMappingURL=(.+?)(?:\s|$)/);
-
-          if (mapPathMatch) {
-            const mapPath = mapPathMatch[1].trim();
-            // Handle relative paths
-            if (mapPath.startsWith('http')) {
-              return mapPath;
-            } else {
-              const baseUrl = jsUrl.substring(0, jsUrl.lastIndexOf('/') + 1);
-              return baseUrl + mapPath;
-            }
-          }
-        }
-      }
-
-      return null;
-    } catch (error) {
-      console.warn(`Error finding source map for ${jsUrl}:`, error.message);
+    const sourceMappingURL = await this.retrieveSourceMapURL(source);
+    if (!sourceMappingURL) {
+      this.sourceMapCache.set(source, { url: null, map: null });
       return null;
     }
-  }
 
-  private async getSourceMap(sourceMapUrl: string): Promise<SourceMapConsumer | null> {
-    try {
-      if (this.sourceMapCache.has(sourceMapUrl)) {
-        return this.sourceMapCache.get(sourceMapUrl)!;
+    let sourceMapData: string;
+    let sourceMapUrl = sourceMappingURL;
+
+    if (sourceMappingURL.startsWith('data:application/json')) {
+      const base64Match = sourceMappingURL.match(/base64,(.+)$/);
+      if (base64Match) {
+        sourceMapData = Buffer.from(base64Match[1], 'base64').toString();
+        sourceMapUrl = source;
+      } else {
+        const jsonMatch = sourceMappingURL.match(/,(.+)$/);
+        sourceMapData = jsonMatch ? decodeURIComponent(jsonMatch[1]) : '';
+        sourceMapUrl = source;
       }
-
-      const sourceMapContent = await this.fetchContent(sourceMapUrl);
-      if (!sourceMapContent) {
+    } else {
+      sourceMapUrl = this.resolveUrl(source, sourceMappingURL);
+      const content = await this.retrieveFile(sourceMapUrl);
+      if (!content) {
+        this.sourceMapCache.set(source, { url: null, map: null });
         return null;
       }
+      sourceMapData = content;
+    }
 
-      // Validate that this is actually a source map
-      const sourceMapData = JSON.parse(sourceMapContent);
-      if (!sourceMapData.version || !sourceMapData.sources || !sourceMapData.mappings) {
-        console.warn(`Invalid source map format at ${sourceMapUrl}`);
-        return null;
-      }
+    if (!sourceMapData) {
+      this.sourceMapCache.set(source, { url: null, map: null });
+      return null;
+    }
 
-      const consumer = await new SourceMapConsumer(sourceMapData);
-      this.sourceMapCache.set(sourceMapUrl, consumer);
-      return consumer;
+    try {
+      const parsedMap = JSON.parse(sourceMapData);
+      const consumer = await new SourceMapConsumer(parsedMap);
+      this.sourceMapCache.set(source, { url: sourceMapUrl, map: consumer });
+
+      return {
+        url: sourceMapUrl,
+        map: parsedMap
+      };
     } catch (error) {
-      console.warn(`Failed to load source map from ${sourceMapUrl}:`, error.message);
+      console.warn(`Failed to parse source map for ${source}:`, error.message);
+      this.sourceMapCache.set(source, { url: null, map: null });
       return null;
     }
   }
 
-  private async fetchContent(url: string): Promise<string | null> {
-    try {
-      if (this.fetchCache.has(url)) {
-        return this.fetchCache.get(url)!;
-      }
+  private async retrieveSourceMapURL(source: string): Promise<string | null> {
+    const content = await this.retrieveFile(source);
+    if (!content) return null;
 
-      let content: string;
+    // Look for sourceMappingURL comment (find the last one)
+    const re = /(?:\/\/[@#]\s*sourceMappingURL=([^\s'"]+)\s*$)|(?:\/\*[@#]\s*sourceMappingURL=([^\s*'"]+)\s*(?:\*\/)\s*$)/gm;
+    let lastMatch: RegExpExecArray | null = null;
+    let match: RegExpExecArray | null;
 
-      if (url.startsWith('http')) {
-        // Fetch from URL
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; PerformanceAuditor/1.0)'
-          }
-        });
-
-        if (!response.ok) {
-          return null;
-        }
-
-        content = await response.text();
-      } else {
-        // Read from local file
-        if (!existsSync(url)) {
-          return null;
-        }
-        content = await readFile(url, 'utf-8');
-      }
-
-      this.fetchCache.set(url, content);
-      return content;
-    } catch (error) {
-      console.warn(`Failed to fetch content from ${url}:`, error.message);
-      return null;
+    while ((match = re.exec(content))) {
+      lastMatch = match;
     }
+
+    return lastMatch ? (lastMatch[1] || lastMatch[2]) : null;
   }
 
-  private async urlExists(url: string): Promise<boolean> {
+  private async retrieveFile(filePath: string): Promise<string | null> {
+    filePath = filePath.trim();
+
+    if (filePath.startsWith('file://')) {
+      filePath = filePath.replace(/^file:\/\/\/(\w:)?/, (_, drive) => drive ? '' : '/');
+    }
+
+    if (this.fileContentsCache.has(filePath)) {
+      return this.fileContentsCache.get(filePath)!;
+    }
+
+    let content: string | null = null;
+
     try {
-      if (url.startsWith('http')) {
-        const response = await fetch(url, { method: 'HEAD' });
-        return response.ok;
+      if (filePath.startsWith('http')) {
+        const response = await fetch(filePath);
+        content = response.ok ? await response.text() : null;
+      } else if (existsSync(filePath)) {
+        content = await readFile(filePath, 'utf-8');
+      }
+    } catch (error) { }
+    this.fileContentsCache.set(filePath, content);
+    return content;
+  }
+
+  private resolveUrl(base: string, relative: string): string {
+    if (!base || relative.startsWith('http') || relative.startsWith('file:')) {
+      return relative;
+    }
+
+    try {
+      if (base.startsWith('http')) {
+        return new URL(relative, base).href;
       } else {
-        return existsSync(url);
+        return path.resolve(path.dirname(base), relative);
       }
     } catch {
-      return false;
+      return relative;
     }
   }
 
   private isMinifiedJavaScript(url: string): boolean {
-    if (!url || !url.includes('.js')) {
+    if (!url || !url.endsWith('.js')) {
       return false;
     }
 
-    // Skip if already looks like original source
     if (url.includes('/src/') || url.includes('/source/') || url.includes('webpack://')) {
       return false;
     }
-
-    // Common patterns for minified/bundled files
-    const minifiedPatterns = [
+    const patterns = [
       /\.min\.js$/,
-      /\.[a-f0-9]{8,}\.js$/,  // Hash-based filenames
-      /\.[a-f0-9]{20,}\.js$/, // Long hash filenames
-      /chunk\.[a-f0-9]+\.js$/,
-      /vendors?\.[a-f0-9]+\.js$/,
-      /runtime\.[a-f0-9]+\.js$/,
-      // Bundle-specific patterns
-      /\.bundle\.js$/,
-      /\.dll\.js$/,           // DLL bundles (like Kibana)
-      /\.entry\.js$/,         // Entry point bundles
-      /\.plugin\.js$/,        // Plugin bundles
-      // Common bundler output patterns
-      /bundles?\/.*\.js$/,    // Files in bundles directories
-      /dist\/.*\.js$/,        // Files in dist directories
-      /build\/.*\.js$/,       // Files in build directories
-      // Framework-specific patterns
-      /kbn-.*\.js$/,          // Kibana bundles
-      /app\.[a-f0-9]+\.js$/,  // App bundles with hashes
-      /main\.[a-f0-9]+\.js$/, // Main bundles with hashes
-      /polyfills?\.[a-f0-9]+\.js$/ // Polyfill bundles
+      /\.[a-f0-9]{8,}\.js$/,
+      /\.(chunk|bundle|dll|entry|plugin)\.js$/,
+      /\/(bundles?|dist|build)\/.*\.js$/,
+      /^(app|main|runtime|vendor|polyfill)\.[a-f0-9]+\.js$/,
+      /^kbn-.*\.js$/
     ];
 
-    return minifiedPatterns.some(pattern => pattern.test(url));
+    return patterns.some(pattern => pattern.test(url));
   }
 
   private cleanSourcePath(sourcePath: string): string {
-    // Remove webpack:// prefix
-    sourcePath = sourcePath.replace(/^webpack:\/\//, '');
-
-    // Remove leading ./
-    sourcePath = sourcePath.replace(/^\.\//, '');
-
-    // Handle node_modules paths more intelligently
+    sourcePath = sourcePath.replace(/^webpack:\/\//, '').replace(/^\.\//, '');
     if (sourcePath.includes('node_modules')) {
-      // Extract package name and meaningful file path
-      const nodeModulesMatch = sourcePath.match(/node_modules\/([^\/]+)(?:\/(.+))?/);
-      if (nodeModulesMatch) {
-        const packageName = nodeModulesMatch[1];
-        const filePath = nodeModulesMatch[2];
-
+      const match = sourcePath.match(/node_modules\/([^\/]+)(?:\/(.+))?/);
+      if (match) {
+        const [, packageName, filePath] = match;
         if (filePath) {
-          // For files within packages, show package/file structure
-          const filePathParts = filePath.split('/');
-          if (filePathParts.length > 2) {
-            // Show package/.../ last few parts for deep paths
-            return `node_modules/${packageName}/.../${filePathParts.slice(-2).join('/')}`;
-          } else {
-            // Show full path for shallow paths
-            return `node_modules/${packageName}/${filePath}`;
-          }
-        } else {
-          // Just the package name
-          return `node_modules/${packageName}`;
+          const parts = filePath.split('/');
+          return parts.length > 2
+            ? `node_modules/${packageName}/.../${parts.slice(-2).join('/')}`
+            : `node_modules/${packageName}/${filePath}`;
         }
+        return `node_modules/${packageName}`;
       }
     }
 
-    // Handle webpack internal paths
-    if (sourcePath.startsWith('webpack/')) {
-      return `webpack/${sourcePath.split('/').slice(1, 3).join('/')}`;
+    const parts = sourcePath.split('/');
+    if (parts.length > 6) {
+      return `${parts[0]}/.../${parts.slice(-3).join('/')}`;
     }
-
-    // Shorten very long paths for non-node_modules
-    const pathParts = sourcePath.split('/');
-    if (pathParts.length > 4) {
-      return `.../${pathParts.slice(-3).join('/')}`;
-    }
-
     return sourcePath;
-  }
-
-  dispose(): void {
-    for (const consumer of this.sourceMapCache.values()) {
-      consumer.destroy();
-    }
-    this.sourceMapCache.clear();
-    this.fetchCache.clear();
   }
 }

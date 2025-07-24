@@ -1,16 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { Artifacts } from 'lighthouse';
 import type { CPUProfile, CPUProfileNode, AggregatedFunction, CPUProfileAnalysis } from './types';
 import { SourceMapResolver } from './resolver.js';
 
 class CPUProfileAnalyzer {
   sourceMapResolver = new SourceMapResolver();
+  private nodeById = new Map<number, CPUProfileNode>();
   private analysisResults = {
-    summary: {},
     topFunctions: [] as AggregatedFunction[],
-    scriptAnalysis: [],
     rawData: {
       totalSamples: 0,
       totalTime: 0,
@@ -29,20 +27,10 @@ class CPUProfileAnalyzer {
       }
 
       await this.analyzeCPUProfileData(cpuProfile);
-      if (traceEvents) {
-        this.analyzeTraceEvents(traceEvents);
-      }
 
-      // Generate flamegraph data for LLM analysis
-      const flamegraphData = await this.generateFlamegraphData(cpuProfilePath);
+      const flamegraphData = await this.generateFlamegraphData();
       const report = this.generateLLMReport(flamegraphData);
-
-      const outputDir = dirname(cpuProfilePath);
-      // get timestamp from cpuProfile filename
-      const timestamp = cpuProfilePath.split('-').pop().split('.')[0];
-      const reportPath = join(outputDir, `analysis-report-${timestamp}.json`);
-      this.saveReport(report, reportPath);
-
+      this.saveReport(report, join(dirname(cpuProfilePath), `complete-analysis.json`));
       return report;
     } catch (error) {
       console.error('Error analyzing CPU profile:', error);
@@ -57,20 +45,20 @@ class CPUProfileAnalyzer {
     }
 
     // Build node relationships using Speedscope's exact approach
-    const nodeById = new Map<number, CPUProfileNode>();
+    this.nodeById.clear(); // Clear any previous data
     for (let node of nodes) {
-      nodeById.set(node.id, node);
+      this.nodeById.set(node.id, node);
     }
 
     // Establish parent-child relationships (Speedscope approach)
     for (let node of nodes) {
       if (typeof node.parent === 'number') {
-        node.parent = nodeById.get(node.parent);
+        node.parent = this.nodeById.get(node.parent);
       }
 
       if (!node.children) continue;
       for (let childId of node.children) {
-        const child = nodeById.get(childId);
+        const child = this.nodeById.get(childId);
         if (!child) continue;
         child.parent = node;
       }
@@ -91,7 +79,7 @@ class CPUProfileAnalyzer {
     }
 
     for (let [nodeId, selfTime] of selfTimes) {
-      const node = nodeById.get(nodeId);
+      const node = this.nodeById.get(nodeId);
       if (node) {
         node.selfTime = selfTime;
         node.hitCount = hitCounts.get(nodeId) || 0;
@@ -106,10 +94,10 @@ class CPUProfileAnalyzer {
       duration: endTime && startTime ? (endTime - startTime) / 1000000 : totalTime / 1000
     };
 
-    this.calculateTotalTimesSpeedscope(nodeById);
+    this.calculateTotalTimesSpeedscope(this.nodeById);
 
     // Extract top functions using Speedscope filtering
-    const sortedFunctions = Array.from(nodeById.values())
+    const sortedFunctions = Array.from(this.nodeById.values())
       .filter(node => {
         if (!node.hitCount || node.hitCount === 0) return false;
         return !this.shouldIgnoreFunction(node.callFrame);
@@ -118,6 +106,7 @@ class CPUProfileAnalyzer {
       .slice(0, 20);
 
     this.analysisResults.topFunctions = sortedFunctions.map(node => ({
+      nodeId: node.id,
       functionName: this.getDisplayName(node.callFrame),
       url: node.callFrame.url || '(unknown)',
       lineNumber: (node.callFrame.lineNumber || 0) + 1,
@@ -133,14 +122,19 @@ class CPUProfileAnalyzer {
 
   private async resolveSourceMapsForTopFunctions(): Promise<void> {
     try {
-      const locationsToResolve = this.analysisResults.topFunctions.map(func => ({
-        url: func.url,
-        line: func.lineNumber,
-        column: func.columnNumber
+      const functionsWithNodes = this.analysisResults.topFunctions.map(func => ({
+        func,
+        node: this.nodeById.get(func.nodeId)
       }));
 
-      const resolvedLocations = await this.sourceMapResolver.resolveLocations(locationsToResolve);
-      // Update top functions with resolved locations
+      const resolvedLocations = await this.sourceMapResolver.resolveLocations(
+        functionsWithNodes.map(item => ({
+          url: item.func.url,
+          line: item.func.lineNumber,
+          column: item.func.columnNumber
+        }))
+      );
+      // Update top functions with resolved locations and enhanced information
       this.analysisResults.topFunctions = this.analysisResults.topFunctions.map((func, index) => {
         const resolved = resolvedLocations[index];
         if (resolved.isResolved) {
@@ -150,7 +144,9 @@ class CPUProfileAnalyzer {
             originalLine: resolved.originalLine,
             originalColumn: resolved.originalColumn,
             originalName: resolved.originalName,
-            isSourceMapped: true
+            isSourceMapped: true,
+            fullOriginalPath: resolved.fullOriginalPath,
+            sourceMapUrl: resolved.sourceMapUrl
           };
         }
         return { ...func, isSourceMapped: false };
@@ -294,25 +290,6 @@ class CPUProfileAnalyzer {
     });
   }
 
-  analyzeTraceEvents(traceEvents: Artifacts['Trace']['traceEvents']) {
-    // Analyze script execution
-    const scriptEvents = traceEvents
-      .filter(event =>
-        event.name === 'EvaluateScript' ||
-        event.name === 'v8.compile' ||
-        event.name === 'FunctionCall'
-      )
-      .map(event => ({
-        type: event.name,
-        duration: event.dur ? Math.round(event.dur / 1000) : 0,
-        url: event.args?.data?.url || 'unknown',
-        startTime: Math.round(event.ts / 1000)
-      }));
-
-    this.analysisResults.scriptAnalysis = scriptEvents.slice(0, 15);
-  }
-
-
   getSeverity(percentage: number): string {
     if (percentage > 0.2) return 'CRITICAL';
     if (percentage > 0.1) return 'HIGH';
@@ -330,25 +307,14 @@ class CPUProfileAnalyzer {
     }
   }
 
-  async generateFlamegraphData(cpuProfilePath: string): Promise<any> {
+  async generateFlamegraphData(): Promise<any> {
     try {
-      // Generate flamegraph analysis data structure for LLM
-      const flamegraphAnalysis = {
+      return {
         callStack: this.generateCallStackAnalysis(),
         hotPaths: this.identifyHotPaths(),
         functionHierarchy: this.buildFunctionHierarchy(),
         visualSummary: this.createVisualSummary()
       };
-
-      // Optionally save flamegraph data for external tools
-      const outputDir = dirname(cpuProfilePath);
-      const timestamp = cpuProfilePath.split('-').pop()?.split('.')[0] || 'unknown';
-      const flamegraphPath = join(outputDir, `flamegraph-data-${timestamp}.json`);
-
-      writeFileSync(flamegraphPath, JSON.stringify(flamegraphAnalysis, null, 2));
-      console.log(`🔥 Flamegraph data saved to: ${flamegraphPath}`);
-
-      return flamegraphAnalysis;
     } catch (error) {
       console.warn('Failed to generate flamegraph data:', error.message);
       return null;
@@ -482,7 +448,7 @@ class CPUProfileAnalyzer {
   }
 
   generateLLMReport(flamegraphData?: any): CPUProfileAnalysis {
-    const { rawData, topFunctions, scriptAnalysis } = this.analysisResults;
+    const { rawData, topFunctions } = this.analysisResults;
     return {
       executive_summary: {
         total_execution_time_ms: rawData.totalTime,
@@ -501,11 +467,12 @@ class CPUProfileAnalyzer {
         originalLine: func.originalLine,
         originalColumn: func.originalColumn,
         originalName: func.originalName,
-        isSourceMapped: func.isSourceMapped
+        isSourceMapped: func.isSourceMapped,
+        // Enhanced fields for better LLM analysis
+        fullOriginalPath: func.fullOriginalPath,
+        sourceMapUrl: func.sourceMapUrl,
+        resolvedStackTrace: func.resolvedStackTrace
       })),
-      script_performance: {
-        script_execution_analysis: scriptAnalysis || []
-      },
       flamegraph_analysis: flamegraphData,
     };
   }

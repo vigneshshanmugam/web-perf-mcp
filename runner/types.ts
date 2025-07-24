@@ -47,15 +47,11 @@ export interface CPUProfileAnalysis {
     originalColumn?: number;
     originalName?: string | null;
     isSourceMapped?: boolean;
+    // Enhanced fields for better LLM analysis
+    fullOriginalPath?: string;
+    sourceMapUrl?: string;
+    resolvedStackTrace?: string;
   }>;
-  script_performance: {
-    script_execution_analysis: Array<{
-      type: string;
-      duration: number;
-      url: string;
-      startTime: number;
-    }>;
-  };
   flamegraph_analysis?: {
     callStack: {
       deepestStacks: Array<{ depth: number, path: string[] }>;
@@ -80,7 +76,6 @@ export interface CPUProfileAnalysis {
       executionPattern: { pattern: string, description: string };
     };
   };
-  sourceMapDebug?: string[];
 }
 
 
@@ -109,6 +104,7 @@ export interface CPUProfile {
 }
 
 export interface AggregatedFunction {
+  nodeId: number;               // CPU profile node ID for call stack traversal
   functionName: string;
   url: string;
   lineNumber: number;
@@ -122,4 +118,8 @@ export interface AggregatedFunction {
   originalColumn?: number;
   originalName?: string | null;
   isSourceMapped?: boolean;
+  // Enhanced fields for better LLM analysis
+  fullOriginalPath?: string;    // Complete untruncated original path
+  sourceMapUrl?: string;        // URL of the source map used
+  resolvedStackTrace?: string;  // Complete stack trace context
 }

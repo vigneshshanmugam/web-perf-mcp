@@ -18,7 +18,7 @@ program
     const runner = new AuditRunner({
       device: options.device,
       profile: options.profile,
-      headless: false,
+      headless: options.headless,
     });
     try {
       const markdown = await runner.runAudit(options.url);
@@ -32,8 +32,8 @@ program
 program
   .command("analyze")
   .description("Analyze CPU profile and trace data")
-  .requiredOption("--trace <trace>", "Performance trace to analyze")
   .requiredOption("--profile <profile>", "CPU profile to analyze")
+  .option("--trace <trace>", "Performance trace to analyze")
   .action(async (options) => {
     try {
       const analyzer = new CPUProfileAnalyzer();

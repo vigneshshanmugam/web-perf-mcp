@@ -26,38 +26,34 @@ export default class Formatter {
 
     if (report.high_impact_functions.length > 0) {
       output += `### Function Performance Details\n\n`;
-      output += `| Function | Original Source | File | CPU Time | CPU % | Calls | Source Mapped \n`;
-      output += `|----------|----------------|------|----------|-------|-------|---------------|\n`;
+      output += `| Function | Original Source | Minified File | CPU Time | CPU % | Calls | Source Mapped \n`;
+      output += `|----------|----------------|---------------|----------|-------|-------|---------------|\n`;
 
       report.high_impact_functions.slice(0, 10).forEach((func) => {
-        const originalSource = func.originalFile && func.isSourceMapped
-          ? `${func.originalFile}:${func.originalLine}`
+        // Use fullOriginalPath if available, otherwise fall back to originalFile
+        const originalSource = func.isSourceMapped
+          ? (func.fullOriginalPath || (func.originalFile ? `${func.originalFile}:${func.originalLine}` : 'N/A'))
           : 'N/A';
+
+        // Extract just the filename from the full path for cleaner display
+        const displaySource = func.isSourceMapped && func.fullOriginalPath
+          ? `${func.fullOriginalPath.split('/').pop()}:${func.originalLine}`
+          : originalSource;
+
         const sourceMapped = func.isSourceMapped ? '✅' : '❌';
-        output += `| ${func.function} | ${originalSource} | ${func.file} | ${func.execution_time_ms}ms | ${func.cpu_percentage}% | ${func.call_count} | ${sourceMapped} |\n`;
+        const minifiedFile = func.file.split('/').pop() || func.file; // Show just filename for minified
+
+        output += `| ${func.function} | ${displaySource} | ${minifiedFile} | ${func.execution_time_ms}ms | ${func.cpu_percentage}% | ${func.call_count} | ${sourceMapped} |\n`;
       });
       output += `\n`;
-    }
 
-    if (report.script_performance) {
-      output += `## 🔍 SCRIPT EXECUTION\n\n`;
-      if (report.script_performance.script_execution_analysis && report.script_performance.script_execution_analysis.length > 0) {
-        output += `### Script Execution Breakdown\n\n`;
-        output += `| Script Type | Duration | URL | Start Time |\n`;
-        output += `|-------------|----------|-----|------------|\n`;
 
-        report.script_performance.script_execution_analysis.slice(0, 10).forEach((script) => {
-          const hostname = script.url ? new URL(script.url).hostname : 'Unknown';
-          output += `| ${script.type} | ${script.duration}ms | ${hostname} | ${script.startTime.toFixed(1)}ms |\n`;
-        });
-        output += `\n`;
-      }
     }
 
     // Flamegraph Analysis for LLM
     if (report.flamegraph_analysis) {
       output += `## 🔥 FLAMEGRAPH ANALYSIS\n\n`;
-      output += this.formatFlamegraphAnalysis(report.flamegraph_analysis);
+      output += this.formatFlamegraphAnalysis(report.flamegraph_analysis, report.high_impact_functions);
     }
 
     return output;
@@ -75,8 +71,24 @@ export default class Formatter {
     return null;
   }
 
-  private formatFlamegraphAnalysis(flamegraph: any): string {
+  private formatFlamegraphAnalysis(flamegraph: any, highImpactFunctions: any[]): string {
     let output = '';
+
+    // Helper function to resolve function names using source map data
+    const resolveFunctionName = (originalName: string, location?: string) => {
+      // Try to find a matching function in high impact functions
+      const matchedFunc = highImpactFunctions.find(func =>
+        func.function === originalName ||
+        (location && func.location === location)
+      );
+
+      if (matchedFunc && matchedFunc.isSourceMapped && matchedFunc.fullOriginalPath) {
+        const filename = matchedFunc.fullOriginalPath.split('/').pop();
+        return `${matchedFunc.function} (${filename}:${matchedFunc.originalLine})`;
+      }
+
+      return originalName;
+    };
 
     // Execution Pattern Analysis
     if (flamegraph.visualSummary?.executionPattern) {
@@ -88,11 +100,13 @@ export default class Formatter {
     // Critical Path Analysis
     if (flamegraph.callStack?.criticalPath) {
       output += `### 🎯 Critical Execution Path\n\n`;
-      output += `| Function | Self Time | Total Time | CPU % | Location |\n`;
-      output += `|----------|-----------|------------|-------|----------|\n`;
+      output += `| Function | Self Time | Total Time | CPU % | Original Source |\n`;
+      output += `|----------|-----------|------------|-------|----------------|\n`;
 
       flamegraph.callStack.criticalPath.forEach((func: any) => {
-        output += `| ${func.function} | ${func.selfTime}ms | ${func.totalTime}ms | ${func.percentage}% | ${func.location} |\n`;
+        const resolvedName = resolveFunctionName(func.function, func.location);
+        const originalSource = func.location;
+        output += `| ${resolvedName} | ${func.selfTime}ms | ${func.totalTime}ms | ${func.percentage}% | ${originalSource} |\n`;
       });
       output += `\n`;
     }
@@ -103,8 +117,10 @@ export default class Formatter {
       output += `*Most time-consuming call sequences*\n\n`;
 
       flamegraph.hotPaths.forEach((hotPath: any, index: number) => {
+        // Resolve function names in the path
+        const resolvedPath = hotPath.path.map((funcName: string) => resolveFunctionName(funcName));
         output += `**${index + 1}. Path (${hotPath.percentage}% CPU, ${hotPath.totalTime}ms)**\n`;
-        output += `\`\`\`\n${hotPath.path.join(' → ')}\`\`\`\n\n`;
+        output += `\`\`\`\n${resolvedPath.join(' → ')}\`\`\`\n\n`;
       });
     }
 
@@ -115,8 +131,9 @@ export default class Formatter {
       output += `|----------|-------|---------------|\n`;
 
       flamegraph.visualSummary.topCPUConsumers.forEach((consumer: any) => {
+        const resolvedName = resolveFunctionName(consumer.name);
         const bars = '█'.repeat(Math.max(1, Math.floor(consumer.visualWeight / 5)));
-        output += `| ${consumer.name} | ${consumer.percentage}% | ${bars} |\n`;
+        output += `| ${resolvedName} | ${consumer.percentage}% | ${bars} |\n`;
       });
       output += `\n`;
     }
@@ -126,14 +143,16 @@ export default class Formatter {
       output += `### 🌳 Function Call Hierarchy\n\n`;
       output += `**Root Functions** (Entry points):\n`;
       flamegraph.functionHierarchy.rootFunctions.forEach((root: any) => {
-        output += `- **${root.name}** (${root.selfTime}ms self time)\n`;
+        const resolvedName = resolveFunctionName(root.name);
+        output += `- **${resolvedName}** (${root.selfTime}ms self time)\n`;
       });
       output += `\n`;
 
       if (flamegraph.functionHierarchy.leafFunctions?.length > 0) {
         output += `**Leaf Functions** (Terminal functions):\n`;
         flamegraph.functionHierarchy.leafFunctions.slice(0, 5).forEach((leaf: any) => {
-          output += `- **${leaf.functionName}** (${leaf.selfTime}ms, ${leaf.percentage}% CPU)\n`;
+          const resolvedName = resolveFunctionName(leaf.functionName);
+          output += `- **${resolvedName}** (${leaf.selfTime}ms, ${leaf.percentage}% CPU)\n`;
         });
         output += `\n`;
       }
