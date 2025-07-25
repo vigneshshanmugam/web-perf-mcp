@@ -1,22 +1,26 @@
 {
-  "name": "perf-audit-tool",
-  "version": "0.0.0",
-  "private": true,
+  "name": "web-perf-mcp",
+  "version": "0.0.1",
   "description": "Comprehensive performance auditing tool with Lighthouse, Playwright, and LLM analysis",
-  "main": "./dist/runner/index.js",
+  "main": "dist/server/index.js",
   "type": "module",
   "bin": {
-    "perf-audit": "./dist/runner/index.js",
-    "mcp": "./dist/server/index.js"
+    "web-perf-mcp": "dist/server/index.js"
   },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
+    "prepublishOnly": "npm run build",
     "start": "npm run build && node ./dist/server/index.js",
     "test": "npm run build && node ./dist/runner/index.js --url https://example.com"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "performance-audit",
+    "web-performance-mcp"
+  ],
+  "author": "Vignesh Shanmugam",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@types/source-map": "^0.5.7",
@@ -31,6 +35,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "license": "MIT"
+  }
 }

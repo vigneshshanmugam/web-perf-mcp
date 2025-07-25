@@ -1,4 +1,4 @@
-# perf-audit-tool
+# web-perf-mcp
 
 MCP Server that audits the web page for finding the bottlenecks and CPU profiling using Lighthouse and Puppeteer.
 
@@ -16,9 +16,9 @@ Add the MCP Server - Example Windsurf Config
 ```json
 {
   "mcpServers": {
-    "perf-audit": {
+    "web-perf-mcp": {
       "command": "bash",
-      "args": ["-lc", "cd /path/to/perf-audit && ./run-mcp.sh"]
+      "args": ["-lc", "cd /path/to/web-perf-mcp && ./run-mcp.sh"]
     }
   }
 }

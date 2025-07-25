@@ -5,7 +5,6 @@ import { program } from "commander";
 import { AuditRunner, outputDir } from './audit.js';
 import CPUProfileAnalyzer from "./analyzer.js";
 import Formatter from "./formatter.js";
-import { existsSync } from "node:fs";
 
 program
   .command("audit")
