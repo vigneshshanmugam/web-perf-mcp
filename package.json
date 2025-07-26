@@ -1,7 +1,7 @@
 {
   "name": "web-perf-mcp",
   "version": "0.0.1",
-  "description": "Comprehensive performance auditing tool with Lighthouse, Playwright, and LLM analysis",
+  "description": "MCP Server that audits the web page for finding the bottlenecks and CPU profiling using Lighthouse and Puppeteer",
   "main": "dist/server/index.js",
   "type": "module",
   "bin": {
