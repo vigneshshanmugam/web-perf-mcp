@@ -16,6 +16,11 @@ export const TOOL_DEFINITIONS = [
           type: 'boolean',
           default: true,
           description: 'Include detailed CPU profiling data'
+        },
+        headless: {
+          type: 'boolean',
+          default: true,
+          description: 'Run in headless mode'
         }
       },
       required: ['url']
@@ -29,11 +34,11 @@ export const TOOL_DEFINITIONS = [
       properties: {
         cpuProfilePath: {
           type: 'string',
-          description: 'Absolute path to the CPU profile JSON file (required for CPU analysis)'
+          description: 'Absolute path to the CPU profile JSON file (for flame graph generation and find hot functions)'
         },
         traceEventsPath: {
           type: 'string',
-          description: 'Absolute path to the trace events JSON file (optional, enhances analysis when provided)'
+          description: 'Absolute path to the trace events JSON file'
         }
       },
       required: ['cpuProfilePath']

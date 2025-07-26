@@ -13,7 +13,7 @@ program
   )
   .requiredOption("--url <url>", "URL to audit")
   .option("--device <device>", "Device type (desktop|mobile)", "desktop")
-  .option("--profile", "Enable CPU profiling", false)
+  .option("--profile", "Enable CPU profiling", true)
   .option("--headless", "Run in headless mode", true)
   .action(async (options) => {
     const runner = new AuditRunner({
